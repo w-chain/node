@@ -29,6 +29,7 @@ type Call struct {
 	GasUsed string  `json:"gasUsed"`
 	Input   string  `json:"input"`
 	Output  string  `json:"output"`
+	Error   string  `json:"error,omitempty"`
 	Calls   []*Call `json:"calls,omitempty"`
 
 	parent   *Call
@@ -134,12 +135,17 @@ func (c *CallTracer) CallEnd(depth int, output []byte, err error) {
 	c.activeCall.GasUsed = hex.EncodeUint64(gasUsed)
 	c.activeGas = 0
 
-	if depth > 1 {
-		c.activeCall = c.activeCall.parent
+	// A reverted / failed call is a normal, expected outcome — not a tracer failure.
+	// Record it on this frame (before walking to the parent) so the caller still gets a
+	// complete trace, matching geth's callTracer behaviour. Cancelling here instead would
+	// discard the whole trace and surface it as a JSON-RPC error, which poisons indexers
+	// that fetch internal transactions in batches.
+	if err != nil {
+		c.activeCall.Error = err.Error()
 	}
 
-	if err != nil {
-		c.Cancel(err)
+	if depth > 1 {
+		c.activeCall = c.activeCall.parent
 	}
 }
 
