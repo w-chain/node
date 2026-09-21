@@ -234,3 +234,5 @@ require (
 	google.golang.org/api v0.177.0 // indirect
 	gotest.tools/v3 v3.0.2 // indirect
 )
+
+replace github.com/0xPolygon/go-ibft => github.com/w-chain/go-ibft v0.4.1-wchain.2
