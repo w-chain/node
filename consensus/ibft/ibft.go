@@ -3,8 +3,11 @@ package ibft
 import (
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
+	"github.com/armon/go-metrics"
+	"github.com/hashicorp/go-hclog"
 	"github.com/w-chain-team/node/blockchain"
 	"github.com/w-chain-team/node/consensus"
 	"github.com/w-chain-team/node/consensus/ibft/fork"
@@ -17,8 +20,6 @@ import (
 	"github.com/w-chain-team/node/syncer"
 	"github.com/w-chain-team/node/types"
 	"github.com/w-chain-team/node/validators"
-	"github.com/armon/go-metrics"
-	"github.com/hashicorp/go-hclog"
 	"google.golang.org/grpc"
 )
 
@@ -88,6 +89,13 @@ type backendIBFT struct {
 	epochSize          uint64
 	quorumSizeBlockNum uint64
 	blockTime          time.Duration // Minimum block generation time in seconds
+
+	// observer, when set, receives every consensus message this node sees,
+	// including the ones a non-validator would discard. Nil on a validator.
+	observer MessageObserver
+
+	// closeObserver releases the observer's resources on shutdown.
+	closeObserver func() error
 
 	// Channels
 	closeCh chan struct{} // Channel for closing
@@ -171,6 +179,25 @@ func Factory(params *consensus.Params) (consensus.Consensus, error) {
 }
 
 func (i *backendIBFT) Initialize() error {
+	// Watcher build only: WCHAIN_IBFT_OBSERVE names a file to append every
+	// received consensus message to. Unset on a validator, which leaves the
+	// observer nil and this node behaving exactly as an unpatched one.
+	//
+	// An environment variable rather than a config field on purpose: it keeps
+	// the change out of every config struct, parser and default in the tree,
+	// so the patch stays small enough to re-read in full before each rebuild.
+	obs, closeObs, err := NewFileObserver(os.Getenv(ObserveEnv))
+	if err != nil {
+		return err
+	}
+
+	i.observer, i.closeObserver = obs, closeObs
+
+	if obs != nil {
+		i.logger.Warn("IBFT message observation ENABLED — this is a watcher build, not a validator",
+			"file", os.Getenv(ObserveEnv))
+	}
+
 	// register the grpc operator
 	if i.Grpc != nil {
 		i.operator = &operator{ibft: i}
@@ -522,6 +549,12 @@ func (i *backendIBFT) IsLastOfEpoch(number uint64) bool {
 // Close closes the IBFT consensus mechanism, and does write back to disk
 func (i *backendIBFT) Close() error {
 	close(i.closeCh)
+
+	if i.closeObserver != nil {
+		if err := i.closeObserver(); err != nil {
+			return err
+		}
+	}
 
 	if i.syncer != nil {
 		if err := i.syncer.Close(); err != nil {
