@@ -28,6 +28,56 @@ func TestCallTracer_Cancel(t *testing.T) {
 	require.True(t, tracer.cancelled())
 }
 
+// A reverted call must still produce a usable trace. Previously CallEnd cancelled the
+// tracer on any call error, so GetResult returned an error instead of the trace — which
+// made debug_traceTransaction fail outright for every reverted transaction and poisoned
+// batched internal-transaction indexing. The genuine cancel path (timeouts) is unaffected.
+func TestCallTracer_RevertedCallStillReturnsTrace(t *testing.T) {
+	t.Parallel()
+
+	revertErr := errors.New("execution reverted")
+
+	tracer := &CallTracer{}
+	tracer.CallStart(1, types.StringToAddress("1"), types.StringToAddress("2"),
+		4, 1000, big.NewInt(0), []byte("initcode"))
+	tracer.CallEnd(1, []byte("output"), revertErr)
+
+	res, err := tracer.GetResult()
+
+	// The trace is returned, not swallowed by an error.
+	require.NoError(t, err)
+	require.NotNil(t, res)
+
+	call, ok := res.(*Call)
+	require.True(t, ok)
+
+	// The revert is reported on the frame, and the frame is otherwise intact.
+	require.Equal(t, revertErr.Error(), call.Error)
+	require.Equal(t, "CREATE", call.Type)
+	require.Equal(t, hex.EncodeToHex([]byte("initcode")), call.Input)
+
+	// The tracer was not put into a cancelled state.
+	require.False(t, tracer.cancelled())
+}
+
+// The timeout path must still abort the trace.
+func TestCallTracer_CancelStillAbortsTrace(t *testing.T) {
+	t.Parallel()
+
+	timeoutErr := errors.New("timeout")
+
+	tracer := &CallTracer{}
+	tracer.CallStart(1, types.StringToAddress("1"), types.StringToAddress("2"),
+		0, 1000, big.NewInt(0), []byte("input"))
+	tracer.Cancel(timeoutErr)
+
+	res, err := tracer.GetResult()
+
+	require.Error(t, err)
+	require.Equal(t, timeoutErr, err)
+	require.Nil(t, res)
+}
+
 func TestCallTracer_Clear(t *testing.T) {
 	t.Parallel()
 
@@ -226,8 +276,11 @@ func TestCallTracer_CallEnd(t *testing.T) {
 		require.Equal(t, uint64(0), tracer.activeGas)
 		require.Equal(t, hex.EncodeToHex(output), tracer.activeCall.Output)
 		require.Equal(t, "0x0", tracer.activeCall.GasUsed)
-		require.True(t, tracer.stop)
-		require.Equal(t, err, tracer.reason)
+		// A failed call is recorded on the frame, not treated as a tracer abort, so the
+		// trace stays intact and GetResult still returns it.
+		require.Equal(t, err.Error(), tracer.activeCall.Error)
+		require.False(t, tracer.stop)
+		require.NoError(t, tracer.reason)
 	})
 
 	t.Run("call_end_when_depth_is_1_no_error_activeAvailableGas_lower_than_start_gas", func(t *testing.T) {
@@ -260,8 +313,11 @@ func TestCallTracer_CallEnd(t *testing.T) {
 		require.Equal(t, uint64(0), tracer.activeGas)
 		require.Equal(t, hex.EncodeToHex(output), tracer.activeCall.Output)
 		require.Equal(t, hex.EncodeUint64(1000), tracer.activeCall.GasUsed)
-		require.True(t, tracer.stop)
-		require.Equal(t, err, tracer.reason)
+		// A failed call is recorded on the frame, not treated as a tracer abort, so the
+		// trace stays intact and GetResult still returns it.
+		require.Equal(t, err.Error(), tracer.activeCall.Error)
+		require.False(t, tracer.stop)
+		require.NoError(t, tracer.reason)
 	})
 
 	t.Run("call_end_when_depth_is_2_no_error", func(t *testing.T) {
