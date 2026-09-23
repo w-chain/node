@@ -47,13 +47,19 @@ func (i *backendIBFT) setupTransport() error {
 				return
 			}
 
+			if err := validateIBFTMessage(msg); err != nil {
+				i.logger.Debug("dropping malformed consensus message", "err", err)
+
+				return
+			}
+
 			i.consensus.AddMessage(msg)
 
 			i.logger.Debug(
 				"validator message received",
 				"type", msg.Type.String(),
-				"height", msg.GetView().Height,
-				"round", msg.GetView().Round,
+				"height", msg.GetView().GetHeight(),
+				"round", msg.GetView().GetRound(),
 				"addr", types.BytesToAddress(msg.From).String(),
 			)
 		},

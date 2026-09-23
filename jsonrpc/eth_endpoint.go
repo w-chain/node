@@ -721,6 +721,10 @@ func (e *Eth) GetFilterLogs(id string) (interface{}, error) {
 
 // GetLogs returns an array of logs matching the filter options
 func (e *Eth) GetLogs(query *LogQuery) (interface{}, error) {
+	if query == nil {
+		return nil, ErrNilLogQuery
+	}
+
 	return e.filterManager.GetLogsForQuery(query)
 }
 
@@ -802,6 +806,10 @@ func (e *Eth) GetCode(address types.Address, filter BlockNumberOrHash) (interfac
 
 // NewFilter creates a filter object, based on filter options, to notify when the state changes (logs).
 func (e *Eth) NewFilter(filter *LogQuery) (interface{}, error) {
+	if filter == nil {
+		return nil, ErrNilLogQuery
+	}
+
 	return e.filterManager.NewLogFilter(filter, nil), nil
 }
 

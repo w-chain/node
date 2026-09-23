@@ -27,6 +27,7 @@ var (
 	ErrBlockRangeTooHigh                = errors.New("block range too high")
 	ErrNoWSConnection                   = errors.New("no websocket connection")
 	ErrUnknownSubscriptionType          = errors.New("unknown subscription type")
+	ErrNilLogQuery                      = errors.New("filter object is required")
 )
 
 // defaultTimeout is the timeout to remove the filters that don't have a web socket stream
@@ -399,13 +400,13 @@ func (f *FilterManager) Run() {
 		select {
 		case evnt := <-blockWatchCh:
 			// new blockchain event
-			if err := f.dispatchEvent(evnt); err != nil {
+			if err := f.safeDispatchEvent(evnt); err != nil {
 				f.logger.Error("failed to dispatch block event", "err", err)
 			}
 
 		case evnt := <-txWatchCh:
 			// new tx pool event
-			if err := f.dispatchEvent(evnt); err != nil {
+			if err := f.safeDispatchEvent(evnt); err != nil {
 				f.logger.Error("failed to dispatch tx pool event", "err", err)
 			}
 
@@ -424,6 +425,18 @@ func (f *FilterManager) Run() {
 			return
 		}
 	}
+}
+
+// safeDispatchEvent dispatches an event, turning a panic in any filter into an
+// error so one bad filter cannot stop the loop or kill the node.
+func (f *FilterManager) safeDispatchEvent(evnt interface{}) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("recovered from panic: %v", r)
+		}
+	}()
+
+	return f.dispatchEvent(evnt)
 }
 
 // Close closed closeCh so that terminate worker

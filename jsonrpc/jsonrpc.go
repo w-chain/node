@@ -59,6 +59,16 @@ type JSONRPCStore interface {
 	debugStore
 }
 
+// HTTP limits. Websocket connections are unaffected: the upgrader clears the
+// server deadlines. The write timeout is generous because explorers send large
+// debug_traceTransaction batches (one entry per tx in a block).
+const (
+	maxRequestBodySize = 16 << 20 // 16 MiB
+	httpReadTimeout    = 60 * time.Second
+	httpWriteTimeout   = 10 * time.Minute
+	httpIdleTimeout    = 120 * time.Second
+)
+
 type Config struct {
 	Store                    JSONRPCStore
 	Addr                     *net.TCPAddr
@@ -128,6 +138,9 @@ func (j *JSONRPC) setupHTTP() error {
 	srv := http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: 60 * time.Second,
+		ReadTimeout:       httpReadTimeout,
+		WriteTimeout:      httpWriteTimeout,
+		IdleTimeout:       httpIdleTimeout,
 	}
 
 	go func() {
@@ -265,6 +278,12 @@ func (j *JSONRPC) handleWs(w http.ResponseWriter, req *http.Request) {
 
 		if isSupportedWSType(msgType) {
 			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						j.logger.Error("recovered from panic in WS handler", "err", r)
+					}
+				}()
+
 				resp, handleErr := j.dispatcher.HandleWs(message, wrapConn)
 				if handleErr != nil {
 					j.logger.Error(fmt.Sprintf("Unable to handle WS request, %s", handleErr.Error()))
@@ -302,7 +321,7 @@ func (j *JSONRPC) handle(w http.ResponseWriter, req *http.Request) {
 }
 
 func (j *JSONRPC) handleJSONRPCRequest(w http.ResponseWriter, req *http.Request) {
-	data, err := io.ReadAll(req.Body)
+	data, err := io.ReadAll(http.MaxBytesReader(w, req.Body, maxRequestBodySize))
 	if err != nil {
 		_, _ = w.Write([]byte(err.Error()))
 

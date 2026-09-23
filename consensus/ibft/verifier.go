@@ -112,6 +112,12 @@ func (i *backendIBFT) IsValidProposal(rawProposal []byte) bool {
 }
 
 func (i *backendIBFT) IsValidValidator(msg *protoIBFT.Message) bool {
+	// go-ibft calls this before its own View nil check, including for
+	// messages nested inside certificates.
+	if msg == nil || msg.View == nil || len(msg.From) == 0 {
+		return false
+	}
+
 	msgNoSig, err := msg.PayloadNoSig()
 	if err != nil {
 		return false

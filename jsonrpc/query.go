@@ -169,6 +169,12 @@ func (q *LogQuery) UnmarshalJSON(data []byte) error {
 
 // Match returns whether the receipt includes topics for this filter
 func (q *LogQuery) Match(log *types.Log) bool {
+	// A nil query must never reach here, but matching nothing is safer than
+	// panicking inside the filter manager loop.
+	if q == nil || log == nil {
+		return false
+	}
+
 	// check addresses
 	if len(q.Addresses) > 0 {
 		match := false

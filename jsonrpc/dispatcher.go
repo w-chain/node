@@ -203,9 +203,17 @@ func (d *Dispatcher) handleSubscribe(req Request, conn wsConn) (string, Error) {
 	if subscribeMethod == "newHeads" {
 		filterID = d.filterManager.NewBlockFilter(conn)
 	} else if subscribeMethod == "logs" {
+		if len(params) < 2 {
+			return "", NewInvalidParamsError("logs subscription requires a filter object")
+		}
+
 		logQuery, err := decodeLogQueryFromInterface(params[1])
 		if err != nil {
 			return "", NewInternalError(err.Error())
+		}
+
+		if logQuery == nil {
+			return "", NewInvalidParamsError("logs subscription requires a filter object")
 		}
 		filterID = d.filterManager.NewLogFilter(logQuery, conn)
 	} else if subscribeMethod == "newPendingTransactions" {

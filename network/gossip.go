@@ -107,6 +107,14 @@ func (t *Topic) readLoop(sub *pubsub.Subscription, handler func(obj interface{},
 		}
 
 		go func() {
+			// A panic in a handler must not take the whole node down.
+			defer func() {
+				if r := recover(); r != nil {
+					t.logger.Error("recovered from panic in gossip handler", "err", r)
+					metrics.IncrCounter([]string{networkMetrics, "bad_messages"}, float32(1))
+				}
+			}()
+
 			obj := t.createObj()
 			if err := proto.Unmarshal(msg.Data, obj); err != nil {
 				t.logger.Error("failed to unmarshal topic", "err", err)
