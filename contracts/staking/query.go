@@ -22,7 +22,7 @@ const (
 
 var (
 	// staking contract address
-	AddrStakingContract = types.StringToAddress("fAc510D5dB8cadfF323D4b979D898dc38F3FB6dF")
+	AddrStakingContract = types.StringToAddress("d941a16af07cAc64F61C92258250C018F6e929E0")
 
 	// QueryGasLimit is the gas each validator-set view call may use. At 1M,
 	// validatorBLSPublicKeys() ran out of gas at ~150 validators (the contract
