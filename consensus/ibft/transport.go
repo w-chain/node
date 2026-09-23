@@ -43,11 +43,7 @@ func (i *backendIBFT) setupTransport() error {
 
 	// Subscribe to the newly created topic
 	if err := topic.Subscribe(
-		func(obj interface{}, _ peer.ID) {
-			if !i.isActiveValidator() {
-				return
-			}
-
+		func(obj interface{}, from peer.ID) {
 			msg, ok := obj.(*proto.Message)
 			if !ok {
 				i.logger.Error("invalid type assertion for message request")
@@ -58,6 +54,17 @@ func (i *backendIBFT) setupTransport() error {
 			if err := validateIBFTMessage(msg); err != nil {
 				i.logger.Debug("dropping malformed consensus message", "err", err)
 
+				return
+			}
+
+			// Observe BEFORE the validator check: this is precisely the
+			// message a non-validator would otherwise discard, and it is the
+			// only place double-signing is visible.
+			if i.observer != nil {
+				i.observer(msg, from)
+			}
+
+			if !i.isActiveValidator() {
 				return
 			}
 
