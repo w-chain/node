@@ -377,3 +377,32 @@ func loadTestData(t *testing.T, name string) string {
 
 	return string(data)
 }
+
+// effectiveGasPrice is what the transaction actually paid per gas, as on
+// Ethereum: the gas price for legacy txs, min(baseFee+tip, feeCap) for type 2.
+func Test_toReceipt_EffectiveGasPrice(t *testing.T) {
+	t.Parallel()
+
+	const gwei = 1_000_000_000
+
+	status := types.ReceiptSuccess
+	header := &types.Header{Number: 1, BaseFee: 800 * gwei}
+
+	for _, tc := range []struct {
+		name string
+		tx   *types.Transaction
+		want int64
+	}{
+		{"legacy", &types.Transaction{Type: types.LegacyTx, GasPrice: big.NewInt(801 * gwei)}, 801 * gwei},
+		{"type-2 no tip", &types.Transaction{Type: types.DynamicFeeTx,
+			GasFeeCap: big.NewInt(1600 * gwei), GasTipCap: big.NewInt(0)}, 800 * gwei},
+		{"type-2 with tip", &types.Transaction{Type: types.DynamicFeeTx,
+			GasFeeCap: big.NewInt(1600 * gwei), GasTipCap: big.NewInt(1 * gwei)}, 801 * gwei},
+		{"type-2 capped", &types.Transaction{Type: types.DynamicFeeTx,
+			GasFeeCap: big.NewInt(850 * gwei), GasTipCap: big.NewInt(100 * gwei)}, 850 * gwei},
+	} {
+		r := toReceipt(&types.Receipt{Status: &status}, tc.tx, 0, header, nil)
+		got := big.Int(r.EffectiveGasPrice)
+		require.Equal(t, big.NewInt(tc.want).String(), got.String(), tc.name)
+	}
+}

@@ -207,6 +207,7 @@ type receipt struct {
 	FromAddr          types.Address  `json:"from"`
 	ToAddr            *types.Address `json:"to"`
 	Type              argUint64      `json:"type"`
+	EffectiveGasPrice argBig         `json:"effectiveGasPrice"`
 }
 
 func toReceipt(src *types.Receipt, tx *types.Transaction,
@@ -226,6 +227,7 @@ func toReceipt(src *types.Receipt, tx *types.Transaction,
 		ToAddr:            tx.To,
 		Logs:              logs,
 		Type:              argUint64(tx.Type),
+		EffectiveGasPrice: argBig(*tx.GetGasPrice(header.BaseFee)),
 	}
 }
 
