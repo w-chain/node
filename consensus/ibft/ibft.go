@@ -370,6 +370,12 @@ func (i *backendIBFT) verifyHeaderImpl(
 		return ErrWrongDifficulty
 	}
 
+	if i.isWChainV108(header.Number) {
+		if err := verifyV108Header(parent, header, i.blockchain.CalculateBaseFee(parent)); err != nil {
+			return err
+		}
+	}
+
 	// ensure the extra data is correctly formatted
 	if _, err := headerSigner.GetIBFTExtra(header); err != nil {
 		return err

@@ -242,7 +242,12 @@ type backendMock struct {
 	mock.Mock
 	blocks         map[types.Hash]*types.Block
 	blocksByNumber map[uint64]*types.Block
+	forks          *chain.Forks // preV108Forks when nil
 }
+
+// preV108Forks is every fork except WChainV108, so the existing cases keep
+// testing the pre-fork oracle (tip floored at MinGasPrice).
+var preV108Forks = chain.AllForksEnabled.Copy().RemoveFork(chain.WChainV108)
 
 func (b *backendMock) Header() *types.Header {
 	args := b.Called()
@@ -263,8 +268,50 @@ func (b *backendMock) GetBlockByHash(hash types.Hash, full bool) (*types.Block, 
 }
 
 func (b *backendMock) Config() *chain.Params {
+	forks := preV108Forks
+	if b.forks != nil {
+		forks = b.forks
+	}
+
 	return &chain.Params{
 		ChainID: 1,
-		Forks:   chain.AllForksEnabled,
+		Forks:   forks,
+	}
+}
+
+// M1: before WChainV108 an idle chain quotes an 800 gwei tip on top of the
+// 800 gwei base fee; after it only the base fee carries the floor.
+func TestGasHelper_TipFloorDroppedAtWChainV108(t *testing.T) {
+	t.Parallel()
+
+	newConfig := func() *Config {
+		return &Config{
+			NumOfBlocksToCheck: 20,
+			PricePercentile:    60,
+			SampleNumber:       3,
+			MaxPrice:           ethgo.Gwei(1000),
+			LastPrice:          ethgo.Gwei(1),
+			IgnorePrice:        big.NewInt(2),
+		}
+	}
+
+	for _, tc := range []struct {
+		forkAt   uint64
+		expected *big.Int
+	}{
+		{forkAt: 1000, expected: new(big.Int).SetUint64(chain.MinGasPrice)}, // not yet active
+		{forkAt: 5, expected: ethgo.Gwei(1)},                                // active
+	} {
+		backend := createTestBlocks(t, 10)
+		forks := chain.AllForksEnabled.Copy()
+		forks.SetFork(chain.WChainV108, chain.NewFork(tc.forkAt))
+		backend.forks = forks
+
+		gasHelper, err := NewGasHelper(newConfig(), backend)
+		require.NoError(t, err)
+
+		price, err := gasHelper.MaxPriorityFeePerGas()
+		require.NoError(t, err)
+		require.Equal(t, tc.expected, price, "fork at %d", tc.forkAt)
 	}
 }

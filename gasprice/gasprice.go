@@ -84,6 +84,11 @@ type GasHelper struct {
 	lock sync.Mutex
 
 	historyCache *lru.Cache
+
+	// rawIgnorePrice and rawLastPrice are the configured values before the
+	// MinGasPrice floor was applied to them.
+	rawIgnorePrice *big.Int
+	rawLastPrice   *big.Int
 }
 
 // NewGasHelper is the constructor function for GasHelper struct
@@ -92,6 +97,10 @@ func NewGasHelper(config *Config, backend Blockchain) (*GasHelper, error) {
 	if pricePercentile > 100 {
 		pricePercentile = 100
 	}
+
+	// Unfloored values, used once WChainV108 drops the tip floor.
+	rawIgnorePrice := new(big.Int).Set(config.IgnorePrice)
+	rawLastPrice := new(big.Int).Set(config.LastPrice)
 
 	// Enforce minimum gas price requirements
 	minGasPrice := new(big.Int).SetUint64(chain.MinGasPrice)
@@ -114,6 +123,8 @@ func NewGasHelper(config *Config, backend Blockchain) (*GasHelper, error) {
 		sampleNumber:       config.SampleNumber,
 		ignorePrice:        config.IgnorePrice,
 		lastPrice:          config.LastPrice,
+		rawIgnorePrice:     rawIgnorePrice,
+		rawLastPrice:       rawLastPrice,
 		maxPrice:           config.MaxPrice,
 		backend:            backend,
 		historyCache:       cache,
@@ -149,6 +160,16 @@ func (g *GasHelper) MaxPriorityFeePerGas() (*big.Int, error) {
 
 	var allPrices []*big.Int
 
+	// Before WChainV108 the tip is floored at MinGasPrice on top of the base
+	// fee (which already carries that floor), so users are quoted about twice
+	// the minimum. After it only the base fee is floored.
+	tipFloorDropped := g.backend.Config().Forks.IsActive(chain.WChainV108, currentHeader.Number+1)
+
+	ignorePrice, emptyBlockPrice := g.ignorePrice, lastPrice
+	if tipFloorDropped {
+		ignorePrice, emptyBlockPrice = g.rawIgnorePrice, g.rawLastPrice
+	}
+
 	collectPrices := func(block *types.Block) error {
 		baseFee := new(big.Int).SetUint64(block.Header.BaseFee)
 		txSorter := newTxByEffectiveTipSorter(block.Transactions, baseFee)
@@ -162,7 +183,7 @@ func (g *GasHelper) MaxPriorityFeePerGas() (*big.Int, error) {
 		for _, tx := range txSorter.txs {
 			tip := tx.EffectiveGasTip(baseFee)
 
-			if tip.Cmp(g.ignorePrice) == -1 {
+			if tip.Cmp(ignorePrice) == -1 {
 				// ignore transactions with tip lower than ignore price
 				continue
 			}
@@ -186,7 +207,7 @@ func (g *GasHelper) MaxPriorityFeePerGas() (*big.Int, error) {
 		if len(blockTxPrices) == 0 {
 			// either block is empty or all transactions in block are sent by the miner.
 			// in this case add the latests calculated price for sampling
-			blockTxPrices = append(blockTxPrices, lastPrice)
+			blockTxPrices = append(blockTxPrices, emptyBlockPrice)
 		}
 
 		// add the block prices to the slice of all prices
@@ -232,7 +253,7 @@ func (g *GasHelper) MaxPriorityFeePerGas() (*big.Int, error) {
 
 	// Ensure the price doesn't go below minimum
 	minGasPrice := new(big.Int).SetUint64(chain.MinGasPrice)
-	if price.Cmp(minGasPrice) < 0 {
+	if !tipFloorDropped && price.Cmp(minGasPrice) < 0 {
 		price = minGasPrice
 	}
 

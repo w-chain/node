@@ -3,6 +3,7 @@ package blockchain
 import (
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"sync"
 	"sync/atomic"
@@ -1370,6 +1371,10 @@ func (b *Blockchain) CalculateBaseFee(parent *types.Header) uint64 {
 
 	parentGasTarget := parent.GasLimit / b.config.Genesis.BaseFeeEM
 
+	if b.config.Params.Forks.IsActive(chain.WChainV108, parent.Number+1) {
+		return calcBaseFeeBig(parent, parentGasTarget, b.config.Genesis.BaseFeeChangeDenom)
+	}
+
 	// If the parent gasUsed is the same as the target, the baseFee remains unchanged.
 	if parent.GasUsed == parentGasTarget {
 		return parent.BaseFee
@@ -1396,6 +1401,51 @@ func (b *Blockchain) calcBaseFeeDelta(gasUsedDelta, parentGasTarget, baseFee uin
 	y := baseFee * gasUsedDelta / parentGasTarget
 
 	return y / b.config.Genesis.BaseFeeChangeDenom
+}
+
+// calcBaseFeeBig is the EIP-1559 base fee update computed with big.Int, as in
+// geth. The uint64 version overflows once baseFee*gasUsedDelta exceeds 2^64,
+// which caps congestion pricing (and on high gas limit chains breaks it at the
+// floor). The result is floored at MinGasPrice and capped at MaxUint64.
+func calcBaseFeeBig(parent *types.Header, parentGasTarget, denom uint64) uint64 {
+	if parent.GasUsed == parentGasTarget || parentGasTarget == 0 || denom == 0 {
+		return common.Max(parent.BaseFee, chain.MinGasPrice)
+	}
+
+	baseFee := new(big.Int).SetUint64(parent.BaseFee)
+	target := new(big.Int).SetUint64(parentGasTarget)
+
+	var gasUsedDelta *big.Int
+	if parent.GasUsed > parentGasTarget {
+		gasUsedDelta = new(big.Int).SetUint64(parent.GasUsed - parentGasTarget)
+	} else {
+		gasUsedDelta = new(big.Int).SetUint64(parentGasTarget - parent.GasUsed)
+	}
+
+	delta := new(big.Int).Mul(baseFee, gasUsedDelta)
+	delta.Div(delta, target)
+	delta.Div(delta, new(big.Int).SetUint64(denom))
+
+	result := new(big.Int)
+
+	if parent.GasUsed > parentGasTarget {
+		if delta.Sign() == 0 {
+			delta.SetUint64(1)
+		}
+
+		result.Add(baseFee, delta)
+	} else {
+		result.Sub(baseFee, delta)
+		if result.Sign() < 0 {
+			result.SetUint64(0)
+		}
+	}
+
+	if !result.IsUint64() {
+		return math.MaxUint64
+	}
+
+	return common.Max(result.Uint64(), chain.MinGasPrice)
 }
 
 func (b *Blockchain) writeBatchAndUpdate(

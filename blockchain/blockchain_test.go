@@ -3,19 +3,20 @@ package blockchain
 import (
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"reflect"
 	"testing"
 
+	"github.com/hashicorp/go-hclog"
+	lru "github.com/hashicorp/golang-lru"
 	"github.com/w-chain-team/node/helper/common"
 	"github.com/w-chain-team/node/helper/hex"
 	"github.com/w-chain-team/node/state"
-	"github.com/hashicorp/go-hclog"
-	lru "github.com/hashicorp/golang-lru"
 
-	"github.com/w-chain-team/node/chain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/w-chain-team/node/chain"
 
 	"github.com/w-chain-team/node/blockchain/storage"
 	"github.com/w-chain-team/node/blockchain/storage/memory"
@@ -1364,6 +1365,11 @@ func TestBlockchain_VerifyBlockBody(t *testing.T) {
 func TestBlockchain_CalculateBaseFee(t *testing.T) {
 	t.Parallel()
 
+	// Upstream cases scaled from 1 gwei to 1000 gwei so that every expected
+	// value stays above W Chain's 800 gwei MinGasPrice floor and the EIP-1559
+	// arithmetic is what is actually being tested.
+	const gwei = uint64(1_000_000_000)
+
 	tests := []struct {
 		blockNumber          uint64
 		parentBaseFee        uint64
@@ -1372,50 +1378,105 @@ func TestBlockchain_CalculateBaseFee(t *testing.T) {
 		expectedBaseFee      uint64
 		elasticityMultiplier uint64
 	}{
-		{6, chain.GenesisBaseFee, 20000000, 10000000, chain.GenesisBaseFee, 2}, // usage == target
-		{6, chain.GenesisBaseFee, 20000000, 10000000, 1125000000, 4},           // usage == target
-		{6, chain.GenesisBaseFee, 20000000, 9000000, 987500000, 2},             // usage below target
-		{6, chain.GenesisBaseFee, 20000000, 9000000, 1100000000, 4},            // usage below target
-		{6, chain.GenesisBaseFee, 20000000, 11000000, 1012500000, 2},           // usage above target
-		{6, chain.GenesisBaseFee, 20000000, 11000000, 1150000000, 4},           // usage above target
-		{6, chain.GenesisBaseFee, 20000000, 20000000, 1125000000, 2},           // usage full
-		{6, chain.GenesisBaseFee, 20000000, 20000000, 1375000000, 4},           // usage full
-		{6, chain.GenesisBaseFee, 20000000, 0, 875000000, 2},                   // usage 0
-		{6, chain.GenesisBaseFee, 20000000, 0, 875000000, 4},                   // usage 0
+		{6, 1000 * gwei, 20000000, 10000000, 1000 * gwei, 2},       // usage == target
+		{6, 1000 * gwei, 20000000, 10000000, 1125 * gwei, 4},       // usage > target
+		{6, 1000 * gwei, 20000000, 9000000, 987_500_000_000, 2},    // usage below target
+		{6, 1000 * gwei, 20000000, 9000000, 1100 * gwei, 4},        // usage above target
+		{6, 1000 * gwei, 20000000, 11000000, 1_012_500_000_000, 2}, // usage above target
+		{6, 1000 * gwei, 20000000, 11000000, 1150 * gwei, 4},       // usage above target
+		{6, 1000 * gwei, 20000000, 20000000, 1125 * gwei, 2},       // usage full
+		{6, 1000 * gwei, 20000000, 20000000, 1375 * gwei, 4},       // usage full
+		{6, 1000 * gwei, 20000000, 0, 875 * gwei, 2},               // usage 0
+		{6, 1000 * gwei, 20000000, 0, 875 * gwei, 4},               // usage 0
+		{6, 800 * gwei, 20000000, 0, 800 * gwei, 2},                // floored at MinGasPrice
 	}
 
-	for i, test := range tests {
-		i := i
-		test := test
+	// Without overflow the v1.0.8 big.Int math must give identical results.
+	for _, v108 := range []bool{false, true} {
+		for i, test := range tests {
+			i, test, v108 := i, test, v108
 
-		t.Run(fmt.Sprintf("test case #%d", i+1), func(t *testing.T) {
-			t.Parallel()
+			t.Run(fmt.Sprintf("v108=%v case #%d", v108, i+1), func(t *testing.T) {
+				t.Parallel()
 
-			blockchain := &Blockchain{
-				config: &chain.Chain{
-					Params: &chain.Params{
-						Forks: &chain.Forks{
-							chain.London: chain.NewFork(5),
+				forks := chain.Forks{chain.London: chain.NewFork(5)}
+				if v108 {
+					forks[chain.WChainV108] = chain.NewFork(0)
+				}
+
+				blockchain := &Blockchain{
+					config: &chain.Chain{
+						Params: &chain.Params{Forks: &forks},
+						Genesis: &chain.Genesis{
+							BaseFeeEM:          test.elasticityMultiplier,
+							BaseFeeChangeDenom: chain.BaseFeeChangeDenom,
 						},
 					},
-					Genesis: &chain.Genesis{
-						BaseFeeEM:          test.elasticityMultiplier,
-						BaseFeeChangeDenom: chain.BaseFeeChangeDenom,
-					},
-				},
-			}
+				}
 
-			parent := &types.Header{
-				Number:   test.blockNumber,
-				GasLimit: test.parentGasLimit,
-				GasUsed:  test.parentGasUsed,
-				BaseFee:  test.parentBaseFee,
-			}
+				parent := &types.Header{
+					Number:   test.blockNumber,
+					GasLimit: test.parentGasLimit,
+					GasUsed:  test.parentGasUsed,
+					BaseFee:  test.parentBaseFee,
+				}
 
-			got := blockchain.CalculateBaseFee(parent)
-			assert.Equal(t, test.expectedBaseFee, got, fmt.Sprintf("expected %d, got %d", test.expectedBaseFee, got))
-		})
+				got := blockchain.CalculateBaseFee(parent)
+				assert.Equal(t, test.expectedBaseFee, got, fmt.Sprintf("expected %d, got %d", test.expectedBaseFee, got))
+			})
+		}
 	}
+}
+
+// M1: the uint64 delta overflows once baseFee*gasUsedDelta > 2^64. Reproduces
+// the audit's table at mainnet parameters and the 320M testnet gas limit.
+func TestBlockchain_CalculateBaseFee_Overflow(t *testing.T) {
+	t.Parallel()
+
+	const gwei = uint64(1_000_000_000)
+
+	newChain := func(v108 bool, denom uint64) *Blockchain {
+		forks := chain.Forks{chain.London: chain.NewFork(0)}
+		if v108 {
+			forks[chain.WChainV108] = chain.NewFork(0)
+		}
+
+		return &Blockchain{config: &chain.Chain{
+			Params:  &chain.Params{Forks: &forks},
+			Genesis: &chain.Genesis{BaseFeeEM: 2, BaseFeeChangeDenom: denom},
+		}}
+	}
+
+	run := func(b *Blockchain, gasLimit uint64, full, empty int) uint64 {
+		h := &types.Header{Number: 1, GasLimit: gasLimit, BaseFee: 800 * gwei}
+		for i := 0; i < full+empty; i++ {
+			h.GasUsed = gasLimit
+			if i >= full {
+				h.GasUsed = 0
+			}
+
+			h = &types.Header{Number: h.Number + 1, GasLimit: gasLimit, BaseFee: b.CalculateBaseFee(h)}
+		}
+
+		return h.BaseFee
+	}
+
+	// Mainnet (20M gas, denom 10): the old math caps congestion pricing and
+	// then sticks above the floor; the fix follows EIP-1559.
+	mainnetOld, mainnetNew := newChain(false, 10), newChain(true, 10)
+	assert.Less(t, run(mainnetOld, 20_000_000, 20, 0), 2000*gwei)
+	assert.Greater(t, run(mainnetNew, 20_000_000, 20, 0), 5000*gwei)
+	assert.Equal(t, 800*gwei, run(mainnetNew, 20_000_000, 40, 300))
+	assert.Greater(t, run(mainnetOld, 20_000_000, 40, 300), 800*gwei)
+
+	// Testnet (320M gas, denom 8): overflows even at the floor, so a full
+	// block does not raise the base fee as it should.
+	testnetOld, testnetNew := newChain(false, 8), newChain(true, 8)
+	assert.Equal(t, 900*gwei, run(testnetNew, 320_000_000, 1, 0))
+	assert.NotEqual(t, 900*gwei, run(testnetOld, 320_000_000, 1, 0))
+
+	// Very long congestion saturates instead of wrapping around.
+	assert.Equal(t, uint64(math.MaxUint64), run(mainnetNew, 20_000_000, 400, 0))
 }
 
 func TestBlockchain_WriteFullBlock(t *testing.T) {

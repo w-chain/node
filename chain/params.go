@@ -122,6 +122,14 @@ const (
 	QuorumCalcAlignment = "quorumcalcalignment"
 	TxHashWithType      = "txHashWithType"
 	LondonFix           = "londonfix"
+
+	// WChainV108 switches on the v1.0.8 consensus rules: base fee verification
+	// with overflow-safe math and no tip floor, header timestamp checks, and
+	// rejection of system state transactions. On an existing chain it stays
+	// inactive until its genesis lists it with an activation block, which must
+	// only be set once every validator runs v1.0.8. Older binaries refuse to
+	// start with such a genesis instead of silently following other rules.
+	WChainV108 = "wchainv108"
 )
 
 // Forks is map which contains all forks and their starting blocks from genesis
@@ -229,4 +237,5 @@ var AllForksEnabled = &Forks{
 	QuorumCalcAlignment: NewFork(0),
 	TxHashWithType:      NewFork(0),
 	LondonFix:           NewFork(0),
+	WChainV108:          NewFork(0),
 }

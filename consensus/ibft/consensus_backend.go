@@ -185,7 +185,9 @@ func (i *backendIBFT) buildBlock(parent *types.Header) (*types.Block, error) {
 	if i.config.Params.Forks.IsActive(chain.London, header.Number) {
 		// Apply EIP-1559 base fee calculation
 		var baseFee uint64
-		if parent.BaseFee > 0 {
+		if parent.BaseFee > 0 || i.config.Params.Forks.IsActive(chain.WChainV108, header.Number) {
+			// After WChainV108 validators verify the base fee, so the proposer
+			// must use exactly the same rule they check against.
 			baseFee = i.blockchain.CalculateBaseFee(parent)
 		} else {
 			baseFee = 5000000000 // 5 gwei default for first EIP-1559 block

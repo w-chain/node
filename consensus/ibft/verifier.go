@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
+	"time"
 
 	"github.com/0xPolygon/go-ibft/messages"
 	protoIBFT "github.com/0xPolygon/go-ibft/messages/proto"
@@ -94,6 +95,14 @@ func (i *backendIBFT) IsValidProposal(rawProposal []byte) bool {
 		i.logger.Error("block header verification failed", "err", err)
 
 		return false
+	}
+
+	if i.isWChainV108(newBlock.Number()) {
+		if err := verifyV108Proposal(newBlock, time.Now()); err != nil {
+			i.logger.Error("block rejected by v1.0.8 rules", "err", err)
+
+			return false
+		}
 	}
 
 	if err := i.blockchain.VerifyPotentialBlock(newBlock); err != nil {
