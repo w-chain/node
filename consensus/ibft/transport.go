@@ -5,6 +5,7 @@ import (
 	"github.com/w-chain-team/node/network"
 	"github.com/w-chain-team/node/types"
 	"github.com/libp2p/go-libp2p/core/peer"
+	gproto "google.golang.org/protobuf/proto"
 )
 
 type transport interface {
@@ -33,6 +34,15 @@ func (i *backendIBFT) setupTransport() error {
 		return err
 	}
 
+	// Structurally malformed consensus messages are never honest: drop them
+	// before they are processed here or relayed to peers, so one bad message
+	// no longer fans out across the whole mesh (audit M4). Only the structural
+	// check runs here — not the height window, which depends on this node's
+	// own head and must not stop a lagging node from relaying current traffic.
+	if err := i.network.RegisterTopicValidator(ibftProto, isWellFormedIBFTMessage); err != nil {
+		return err
+	}
+
 	// Subscribe to the newly created topic
 	if err := topic.Subscribe(
 		func(obj interface{}, _ peer.ID) {
@@ -49,6 +59,13 @@ func (i *backendIBFT) setupTransport() error {
 
 			if err := validateIBFTMessage(msg); err != nil {
 				i.logger.Debug("dropping malformed consensus message", "err", err)
+
+				return
+			}
+
+			if !isWithinMessageWindow(msg.View, i.blockchain.Header().Number) {
+				i.logger.Debug("dropping consensus message outside height/round window",
+					"height", msg.View.Height, "round", msg.View.Round)
 
 				return
 			}
@@ -70,4 +87,14 @@ func (i *backendIBFT) setupTransport() error {
 	i.transport = &gossipTransport{topic: topic}
 
 	return nil
+}
+
+// isWellFormedIBFTMessage is the gossip validator for the consensus topic.
+func isWellFormedIBFTMessage(data []byte) bool {
+	msg := &proto.Message{}
+	if err := gproto.Unmarshal(data, msg); err != nil {
+		return false
+	}
+
+	return validateIBFTMessage(msg) == nil
 }

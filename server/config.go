@@ -59,6 +59,8 @@ type JSONRPC struct {
 	AccessControlAllowOrigin []string
 	BatchLengthLimit         uint64
 	BlockRangeLimit          uint64
+	GasCap                   uint64
+	EVMTimeout               time.Duration
 	ConcurrentRequestsDebug  uint64
 	WebSocketReadLimit       uint64
 }

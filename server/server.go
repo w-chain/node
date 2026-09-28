@@ -688,6 +688,7 @@ func (j *jsonRPCHub) ApplyTxn(
 	txn *types.Transaction,
 	override types.StateOverride,
 	nonPayable bool,
+	txTracer tracer.Tracer,
 ) (result *runtime.ExecutionResult, err error) {
 	blockCreator, err := j.GetConsensus().GetBlockCreator(header)
 	if err != nil {
@@ -706,6 +707,10 @@ func (j *jsonRPCHub) ApplyTxn(
 	}
 
 	transition.SetNonPayable(nonPayable)
+
+	if txTracer != nil {
+		transition.SetTracer(txTracer)
+	}
 
 	result, err = transition.Apply(txn)
 
@@ -871,6 +876,8 @@ func (s *Server) setupJSONRPC() error {
 		PriceLimit:               s.config.PriceLimit,
 		BatchLengthLimit:         s.config.JSONRPC.BatchLengthLimit,
 		BlockRangeLimit:          s.config.JSONRPC.BlockRangeLimit,
+		GasCap:                   s.config.JSONRPC.GasCap,
+		EVMTimeout:               s.config.JSONRPC.EVMTimeout,
 		ConcurrentRequestsDebug:  s.config.JSONRPC.ConcurrentRequestsDebug,
 		WebSocketReadLimit:       s.config.JSONRPC.WebSocketReadLimit,
 	}

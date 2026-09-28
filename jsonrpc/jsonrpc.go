@@ -78,6 +78,8 @@ type Config struct {
 	PriceLimit               uint64
 	BatchLengthLimit         uint64
 	BlockRangeLimit          uint64
+	GasCap                   uint64
+	EVMTimeout               time.Duration
 
 	ConcurrentRequestsDebug uint64
 	WebSocketReadLimit      uint64
@@ -94,6 +96,8 @@ func NewJSONRPC(logger hclog.Logger, config *Config) (*JSONRPC, error) {
 			priceLimit:              config.PriceLimit,
 			jsonRPCBatchLengthLimit: config.BatchLengthLimit,
 			blockRangeLimit:         config.BlockRangeLimit,
+			gasCap:                  config.GasCap,
+			evmTimeout:              config.EVMTimeout,
 			concurrentRequestsDebug: config.ConcurrentRequestsDebug,
 		},
 	)

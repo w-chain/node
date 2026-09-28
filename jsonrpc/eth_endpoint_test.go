@@ -299,13 +299,13 @@ func TestEth_TxnType(t *testing.T) {
 
 func newTestEthEndpoint(store testStore) *Eth {
 	return &Eth{
-		hclog.NewNullLogger(), store, 100, nil, 0,
+		hclog.NewNullLogger(), store, 100, nil, 0, 0, 0,
 	}
 }
 
 func newTestEthEndpointWithPriceLimit(store testStore, priceLimit uint64) *Eth {
 	return &Eth{
-		hclog.NewNullLogger(), store, 100, nil, priceLimit,
+		hclog.NewNullLogger(), store, 100, nil, priceLimit, 0, 0,
 	}
 }
 

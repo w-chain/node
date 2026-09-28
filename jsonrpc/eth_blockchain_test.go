@@ -10,6 +10,7 @@ import (
 	"github.com/w-chain-team/node/helper/hex"
 	"github.com/w-chain-team/node/helper/progress"
 	"github.com/w-chain-team/node/state/runtime"
+	"github.com/w-chain-team/node/state/runtime/tracer"
 	"github.com/w-chain-team/node/txpool/proto"
 	"github.com/w-chain-team/node/types"
 	"github.com/stretchr/testify/assert"
@@ -628,7 +629,7 @@ func (m *mockBlockStore) GetAvgGasPrice() *big.Int {
 	return big.NewInt(m.averageGasPrice)
 }
 
-func (m *mockBlockStore) ApplyTxn(_ *types.Header, _ *types.Transaction, _ types.StateOverride, _ bool) (*runtime.ExecutionResult, error) {
+func (m *mockBlockStore) ApplyTxn(_ *types.Header, _ *types.Transaction, _ types.StateOverride, _ bool, _ tracer.Tracer) (*runtime.ExecutionResult, error) {
 	return &runtime.ExecutionResult{
 		Err:         m.ethCallError,
 		ReturnValue: m.returnValue,

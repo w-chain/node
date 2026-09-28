@@ -19,6 +19,13 @@ const (
 	// we should have enough capacity of the queue
 	// because when queue is full, if the consumer does not read fast enough, new messages are dropped
 	subscribeOutputBufferSize = 1024
+
+	// maxConcurrentHandlers bounds how many messages of one topic are handled
+	// at once. Without it every received message got its own goroutine, so a
+	// flood meant unbounded goroutines (audit M4). When the limit is reached
+	// the read loop waits, and pubsub drops messages for this subscriber once
+	// its buffer is full — backpressure instead of memory growth.
+	maxConcurrentHandlers = 1024
 )
 
 type Topic struct {
@@ -92,6 +99,8 @@ func (t *Topic) readLoop(sub *pubsub.Subscription, handler func(obj interface{},
 		cancelFn()
 	}()
 
+	handlerSlots := make(chan struct{}, maxConcurrentHandlers)
+
 	for {
 		msg, err := sub.Next(ctx)
 		if err != nil {
@@ -106,7 +115,15 @@ func (t *Topic) readLoop(sub *pubsub.Subscription, handler func(obj interface{},
 			continue
 		}
 
+		select {
+		case handlerSlots <- struct{}{}:
+		case <-ctx.Done():
+			return
+		}
+
 		go func() {
+			defer func() { <-handlerSlots }()
+
 			// A panic in a handler must not take the whole node down.
 			defer func() {
 				if r := recover(); r != nil {
@@ -145,4 +162,20 @@ func (s *Server) NewTopic(protoID string, obj proto.Message) (*Topic, error) {
 	tt.closed.Store(false)
 
 	return tt, nil
+}
+
+// RegisterTopicValidator runs validate on every message of the topic before it
+// is delivered locally or relayed to peers. A message it rejects is ignored:
+// neither processed nor forwarded, with no peer penalty.
+func (s *Server) RegisterTopicValidator(protoID string, validate func(data []byte) bool) error {
+	return s.ps.RegisterTopicValidator(
+		protoID,
+		func(_ context.Context, _ peer.ID, msg *pubsub.Message) pubsub.ValidationResult {
+			if validate(msg.Data) {
+				return pubsub.ValidationAccept
+			}
+
+			return pubsub.ValidationIgnore
+		},
+	)
 }

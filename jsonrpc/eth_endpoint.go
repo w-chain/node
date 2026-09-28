@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/hashicorp/go-hclog"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/w-chain-team/node/helper/progress"
 	"github.com/w-chain-team/node/state"
 	"github.com/w-chain-team/node/state/runtime"
+	"github.com/w-chain-team/node/state/runtime/tracer"
 	"github.com/w-chain-team/node/types"
 )
 
@@ -65,12 +67,14 @@ type ethBlockchainStore interface {
 	// GetAvgGasPrice returns the average gas price
 	GetAvgGasPrice() *big.Int
 
-	// ApplyTxn applies a transaction object to the blockchain
+	// ApplyTxn applies a transaction object to the blockchain. tracer may be
+	// nil; when set it is attached to the execution (used to halt it).
 	ApplyTxn(
 		header *types.Header,
 		txn *types.Transaction,
 		override types.StateOverride,
 		nonPayable bool,
+		tracer tracer.Tracer,
 	) (*runtime.ExecutionResult, error)
 
 	// GetSyncProgression retrieves the current sync progression, if any
@@ -98,6 +102,10 @@ type Eth struct {
 	chainID       uint64
 	filterManager *FilterManager
 	priceLimit    uint64
+
+	// gasCap and evmTimeout bound eth_call and eth_estimateGas (0 disables).
+	gasCap     uint64
+	evmTimeout time.Duration
 }
 
 var (
@@ -471,6 +479,8 @@ func (e *Eth) Call(arg *txnArgs, filter BlockNumberOrHash, apiOverride *stateOve
 		transaction.Gas = header.GasLimit
 	}
 
+	transaction.Gas = capCallGas(transaction.Gas, e.gasCap)
+
 	// Force transaction gas price if empty
 	if err = e.fillTransactionGasPrice(transaction); err != nil {
 		return nil, err
@@ -484,10 +494,19 @@ func (e *Eth) Call(arg *txnArgs, filter BlockNumberOrHash, apiOverride *stateOve
 		}
 	}
 
+	deadline := newDeadlineTracer(e.evmTimeout)
+	defer deadline.stop()
+
 	// The return value of the execution is saved in the transition (returnValue field)
-	result, err := e.store.ApplyTxn(header, transaction, override, true)
+	result, err := e.store.ApplyTxn(header, transaction, override, true, deadline.asTracer())
 	if err != nil {
 		return nil, err
+	}
+
+	// A halted execution ends without an error, so check the deadline
+	// before trusting the result.
+	if deadline.timedOut() {
+		return nil, fmt.Errorf("%w after %s", ErrExecutionTimeout, e.evmTimeout)
 	}
 
 	// Check if an EVM revert happened
@@ -558,6 +577,12 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 		// If not, use the referenced block number
 		highEnd = header.GasLimit
 	}
+
+	highEnd = capCallGas(highEnd, e.gasCap)
+
+	// One deadline for the whole binary search, not per attempt.
+	deadline := newDeadlineTracer(e.evmTimeout)
+	defer deadline.stop()
 
 	gasPriceInt := new(big.Int).Set(transaction.GasPrice)
 
@@ -635,7 +660,12 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 
 		transaction.Gas = gas
 
-		result, applyErr := e.store.ApplyTxn(header, transaction, nil, true)
+		result, applyErr := e.store.ApplyTxn(header, transaction, nil, true, deadline.asTracer())
+
+		// A halted execution looks like success; never let it steer the search.
+		if deadline.timedOut() {
+			return true, nil, fmt.Errorf("%w after %s", ErrExecutionTimeout, e.evmTimeout)
+		}
 
 		if result != nil {
 			data = []byte(hex.EncodeToString(result.ReturnValue))

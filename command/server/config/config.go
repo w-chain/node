@@ -30,6 +30,8 @@ type Config struct {
 	LogFilePath              string     `json:"log_to" yaml:"log_to"`
 	JSONRPCBatchRequestLimit uint64     `json:"json_rpc_batch_request_limit" yaml:"json_rpc_batch_request_limit"`
 	JSONRPCBlockRangeLimit   uint64     `json:"json_rpc_block_range_limit" yaml:"json_rpc_block_range_limit"`
+	JSONRPCGasCap            uint64     `json:"json_rpc_gas_cap" yaml:"json_rpc_gas_cap"`
+	JSONRPCEVMTimeout        uint64     `json:"json_rpc_evm_timeout" yaml:"json_rpc_evm_timeout"`
 	JSONLogFormat            bool       `json:"json_log_format" yaml:"json_log_format"`
 	CorsAllowedOrigins       []string   `json:"cors_allowed_origins" yaml:"cors_allowed_origins"`
 
@@ -82,6 +84,14 @@ const (
 	// requests with fromBlock/toBlock values (e.g. eth_getLogs)
 	DefaultJSONRPCBlockRangeLimit uint64 = 1000
 
+	// DefaultJSONRPCGasCap caps the gas of eth_call and eth_estimateGas
+	// (geth's default). Without it a call runs with the full block gas limit.
+	DefaultJSONRPCGasCap uint64 = 50_000_000
+
+	// DefaultJSONRPCEVMTimeout is how many seconds eth_call and eth_estimateGas
+	// may execute before the EVM is halted (geth's default).
+	DefaultJSONRPCEVMTimeout uint64 = 5
+
 	// DefaultNumBlockConfirmations minimal number of child blocks required for the parent block to be considered final
 	// on ethereum epoch lasts for 32 blocks. more details: https://www.alchemy.com/overviews/ethereum-commitment-levels
 	DefaultNumBlockConfirmations uint64 = 64
@@ -132,6 +142,8 @@ func DefaultConfig() *Config {
 		LogFilePath:              "",
 		JSONRPCBatchRequestLimit: DefaultJSONRPCBatchRequestLimit,
 		JSONRPCBlockRangeLimit:   DefaultJSONRPCBlockRangeLimit,
+		JSONRPCGasCap:            DefaultJSONRPCGasCap,
+		JSONRPCEVMTimeout:        DefaultJSONRPCEVMTimeout,
 		Relayer:                  false,
 		NumBlockConfirmations:    DefaultNumBlockConfirmations,
 		ConcurrentRequestsDebug:  DefaultConcurrentRequestsDebug,

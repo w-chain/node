@@ -207,6 +207,20 @@ func setFlags(cmd *cobra.Command) {
 			"that consider fromBlock/toBlock values (e.g. eth_getLogs), value of 0 disables it",
 	)
 
+	cmd.Flags().Uint64Var(
+		&params.rawConfig.JSONRPCGasCap,
+		jsonRPCGasCapFlag,
+		defaultConfig.JSONRPCGasCap,
+		"max gas for eth_call and eth_estimateGas, value of 0 disables it",
+	)
+
+	cmd.Flags().Uint64Var(
+		&params.rawConfig.JSONRPCEVMTimeout,
+		jsonRPCEVMTimeoutFlag,
+		defaultConfig.JSONRPCEVMTimeout,
+		"seconds eth_call and eth_estimateGas may execute before being halted, value of 0 disables it",
+	)
+
 	cmd.Flags().StringVar(
 		&params.rawConfig.LogFilePath,
 		logFileLocationFlag,

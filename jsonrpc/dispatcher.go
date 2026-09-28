@@ -60,6 +60,9 @@ type dispatcherParams struct {
 	jsonRPCBatchLengthLimit uint64
 	blockRangeLimit         uint64
 
+	gasCap     uint64
+	evmTimeout time.Duration
+
 	concurrentRequestsDebug uint64
 }
 
@@ -96,6 +99,8 @@ func (d *Dispatcher) registerEndpoints(store JSONRPCStore) error {
 		d.params.chainID,
 		d.filterManager,
 		d.params.priceLimit,
+		d.params.gasCap,
+		d.params.evmTimeout,
 	}
 	d.endpoints.Net = &Net{
 		store,

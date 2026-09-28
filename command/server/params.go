@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"net"
+	"time"
 
 	"github.com/w-chain-team/node/chain"
 	"github.com/w-chain-team/node/command/server/config"
@@ -28,6 +29,8 @@ const (
 	priceLimitFlag               = "price-limit"
 	jsonRPCBatchRequestLimitFlag = "json-rpc-batch-request-limit"
 	jsonRPCBlockRangeLimitFlag   = "json-rpc-block-range-limit"
+	jsonRPCGasCapFlag            = "json-rpc-gas-cap"
+	jsonRPCEVMTimeoutFlag        = "json-rpc-evm-timeout"
 	maxSlotsFlag                 = "max-slots"
 	maxEnqueuedFlag              = "max-enqueued"
 	blockGasTargetFlag           = "block-gas-target"
@@ -157,6 +160,8 @@ func (p *serverParams) generateConfig() *server.Config {
 			AccessControlAllowOrigin: p.rawConfig.CorsAllowedOrigins,
 			BatchLengthLimit:         p.rawConfig.JSONRPCBatchRequestLimit,
 			BlockRangeLimit:          p.rawConfig.JSONRPCBlockRangeLimit,
+			GasCap:                   p.rawConfig.JSONRPCGasCap,
+			EVMTimeout:               time.Duration(p.rawConfig.JSONRPCEVMTimeout) * time.Second,
 			ConcurrentRequestsDebug:  p.rawConfig.ConcurrentRequestsDebug,
 			WebSocketReadLimit:       p.rawConfig.WebSocketReadLimit,
 		},

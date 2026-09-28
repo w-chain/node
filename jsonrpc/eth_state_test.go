@@ -9,6 +9,7 @@ import (
 	"github.com/w-chain-team/node/helper/hex"
 	"github.com/w-chain-team/node/state"
 	"github.com/w-chain-team/node/state/runtime"
+	"github.com/w-chain-team/node/state/runtime/tracer"
 	"github.com/w-chain-team/node/types"
 	"github.com/stretchr/testify/assert"
 )
@@ -902,7 +903,7 @@ func (m *mockSpecialStore) GetForksInTime(blockNumber uint64) chain.ForksInTime 
 	return chain.AllForksEnabled.At(0)
 }
 
-func (m *mockSpecialStore) ApplyTxn(header *types.Header, txn *types.Transaction, _ types.StateOverride, _ bool) (*runtime.ExecutionResult, error) {
+func (m *mockSpecialStore) ApplyTxn(header *types.Header, txn *types.Transaction, _ types.StateOverride, _ bool, _ tracer.Tracer) (*runtime.ExecutionResult, error) {
 	if m.applyTxnHook != nil {
 		return m.applyTxnHook(header, txn)
 	}
