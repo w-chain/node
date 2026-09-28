@@ -24,3 +24,45 @@ package ibft
 func isStaleSyncerNotification(notifiedNumber, pending uint64) bool {
 	return notifiedNumber < pending
 }
+
+// waitForFreshEvent blocks until the current sequence for `pending` is
+// actually done: either it finished on its own (sequenceCh fires), the node
+// is shutting down (closeCh fires), or a syncer notification arrives for a
+// height at or above `pending`.
+//
+// This function IS the fix: it is what keeps a stale notification from
+// canceling and immediately restarting the same sequence. A stale
+// notification is drained and the loop keeps blocking on the very same
+// channels — it does not return, so the caller never gets a chance to call
+// runSequence(pending) again. Collapsing this back into a single `select`
+// (its shape before this fix) reintroduces the bug even if
+// isStaleSyncerNotification itself is untouched, which is why this behavior
+// is tested directly rather than only through that comparison.
+//
+// onCancel is invoked only when a fresh notification is the reason for
+// returning, never for a stale one and never for the closeCh/sequenceCh
+// paths. closed reports whether closeCh fired.
+func waitForFreshEvent(
+	pending uint64,
+	syncerBlockCh <-chan uint64,
+	sequenceCh <-chan struct{},
+	closeCh <-chan struct{},
+	onCancel func(),
+) (closed bool) {
+	for {
+		select {
+		case number := <-syncerBlockCh:
+			if isStaleSyncerNotification(number, pending) {
+				continue
+			}
+
+			onCancel()
+
+			return false
+		case <-sequenceCh:
+			return false
+		case <-closeCh:
+			return true
+		}
+	}
+}

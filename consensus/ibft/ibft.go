@@ -307,33 +307,23 @@ func (i *backendIBFT) startConsensus() {
 			sequenceCh = i.consensus.runSequence(pending)
 		}
 
-	waitForFreshEvent:
-		for {
-			select {
-			case number := <-syncerBlockCh:
-				// Ignore notifications for a height below the one we are
-				// building: they cannot make this round obsolete, and acting
-				// on one would cancel and immediately restart runSequence for
-				// the same `pending`, signing a second proposal for it.
-				if isStaleSyncerNotification(number, pending) {
-					continue waitForFreshEvent
-				}
-
-				if isValidator {
-					i.consensus.stopSequence()
-					i.logger.Info("canceled sequence", "sequence", pending)
-				}
-
-				break waitForFreshEvent
-			case <-sequenceCh:
-				break waitForFreshEvent
-			case <-i.closeCh:
-				if isValidator {
-					i.consensus.stopSequence()
-				}
-
-				return
+		// Blocks until the sequence for `pending` is actually over. A stale
+		// syncer notification (for a height below `pending`) is filtered out
+		// here without canceling or restarting anything — see
+		// waitForFreshEvent's own comment for why that matters.
+		closed := waitForFreshEvent(pending, syncerBlockCh, sequenceCh, i.closeCh, func() {
+			if isValidator {
+				i.consensus.stopSequence()
+				i.logger.Info("canceled sequence", "sequence", pending)
 			}
+		})
+
+		if closed {
+			if isValidator {
+				i.consensus.stopSequence()
+			}
+
+			return
 		}
 	}
 }
