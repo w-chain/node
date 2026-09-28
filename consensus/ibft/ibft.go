@@ -252,25 +252,26 @@ func (i *backendIBFT) GetSyncProgression() *progress.Progression {
 func (i *backendIBFT) startConsensus() {
 	var (
 		newBlockSub   = i.blockchain.SubscribeEvents()
-		syncerBlockCh = make(chan struct{})
+		syncerBlockCh = make(chan uint64)
 	)
 
 	// Receive a notification every time syncer manages
 	// to insert a valid block. Used for cancelling active consensus
-	// rounds for a specific height
+	// rounds for a specific height. Whether a given notification is actually
+	// stale is decided in the main loop below, against the height it is
+	// currently building (see isStaleSyncerNotification).
 	go func() {
 		eventCh := newBlockSub.GetEventCh()
 
 		for {
-			if ev := <-eventCh; ev.Source == "syncer" {
-				if ev.NewChain[0].Number < i.blockchain.Header().Number {
-					// The blockchain notification system can eventually deliver
-					// stale block notifications. These should be ignored
-					continue
-				}
-
-				syncerBlockCh <- struct{}{}
+			ev := <-eventCh
+			if ev.Source != "syncer" || len(ev.NewChain) == 0 {
+				continue
 			}
+
+			// A single event can carry several inserted blocks; the last
+			// entry is the new head.
+			syncerBlockCh <- ev.NewChain[len(ev.NewChain)-1].Number
 		}
 	}()
 
@@ -306,19 +307,33 @@ func (i *backendIBFT) startConsensus() {
 			sequenceCh = i.consensus.runSequence(pending)
 		}
 
-		select {
-		case <-syncerBlockCh:
-			if isValidator {
-				i.consensus.stopSequence()
-				i.logger.Info("canceled sequence", "sequence", pending)
-			}
-		case <-sequenceCh:
-		case <-i.closeCh:
-			if isValidator {
-				i.consensus.stopSequence()
-			}
+	waitForFreshEvent:
+		for {
+			select {
+			case number := <-syncerBlockCh:
+				// Ignore notifications for a height below the one we are
+				// building: they cannot make this round obsolete, and acting
+				// on one would cancel and immediately restart runSequence for
+				// the same `pending`, signing a second proposal for it.
+				if isStaleSyncerNotification(number, pending) {
+					continue waitForFreshEvent
+				}
 
-			return
+				if isValidator {
+					i.consensus.stopSequence()
+					i.logger.Info("canceled sequence", "sequence", pending)
+				}
+
+				break waitForFreshEvent
+			case <-sequenceCh:
+				break waitForFreshEvent
+			case <-i.closeCh:
+				if isValidator {
+					i.consensus.stopSequence()
+				}
+
+				return
+			}
 		}
 	}
 }
