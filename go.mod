@@ -2,6 +2,8 @@ module github.com/w-chain-team/node
 
 go 1.26.0
 
+toolchain go1.26.6
+
 // Keep the pre-1.23 timer channel semantics that go-ibft's round timers were
 // built and tested against (the old "go 1.21" line implied this).
 godebug asynctimerchan=1
