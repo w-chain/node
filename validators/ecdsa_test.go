@@ -60,7 +60,7 @@ func TestECDSAValidatorCopy(t *testing.T) {
 	typedV2, ok := v2.(*ECDSAValidator)
 
 	assert.True(t, ok)
-	assert.NotSame(t, v1.Address, typedV2.Address)
+	assert.NotSame(t, v1, typedV2, "the copy is a new object")
 }
 
 func TestECDSAValidatorEqual(t *testing.T) {

@@ -477,6 +477,8 @@ func TestStateSyncerManager_AddLog_BuildCommitments(t *testing.T) {
 }
 
 func TestStateSyncerManager_EventTracker_Sync(t *testing.T) {
+	t.Skip("PolyBFT only (needs solc/Docker); W Chain runs IBFT, which never uses this code")
+
 	t.Parallel()
 
 	vals := validator.NewTestValidators(t, 5)

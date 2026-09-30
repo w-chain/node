@@ -114,8 +114,11 @@ func TestBLSValidatorCopy(t *testing.T) {
 	typedV2, ok := v2.(*BLSValidator)
 
 	assert.True(t, ok)
-	assert.NotSame(t, v1.Address, typedV2.Address)
-	assert.NotSame(t, v1.BLSPublicKey, typedV2.BLSPublicKey)
+	assert.NotSame(t, v1, typedV2, "the copy is a new object")
+
+	// The public key bytes are copied too, not shared.
+	typedV2.BLSPublicKey[0] ^= 0xff
+	assert.Equal(t, BLSValidatorPublicKey(testBLSPubKey1), v1.BLSPublicKey)
 }
 
 func TestBLSValidatorEqual(t *testing.T) {

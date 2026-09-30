@@ -20,6 +20,8 @@ import (
 )
 
 func TestSystemState_GetNextCommittedIndex(t *testing.T) {
+	t.Skip("PolyBFT only (needs solc/Docker); W Chain runs IBFT, which never uses this code")
+
 	t.Parallel()
 
 	var sideChainBridgeABI, _ = abi.NewMethod(
@@ -67,6 +69,8 @@ func TestSystemState_GetNextCommittedIndex(t *testing.T) {
 }
 
 func TestSystemState_GetEpoch(t *testing.T) {
+	t.Skip("PolyBFT only (needs solc/Docker); W Chain runs IBFT, which never uses this code")
+
 	t.Parallel()
 
 	setEpochMethod, err := abi.NewMethod("function setEpoch(uint256 _epochId) public payable")
