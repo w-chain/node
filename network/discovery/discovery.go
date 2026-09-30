@@ -204,6 +204,11 @@ func (d *DiscoveryService) addPeersToTable(nodeAddrStrs []string) {
 			continue
 		}
 
+		// Nothing to dial for an entry without an address (bare /p2p/<id>).
+		if len(nodeInfo.Addrs) == 0 {
+			continue
+		}
+
 		if err := d.addToTable(nodeInfo); err != nil {
 			d.logger.Error(
 				"Failed to add new peer to routing table",
@@ -279,11 +284,23 @@ func (d *DiscoveryService) startDiscovery() {
 		case <-d.closeCh:
 			return
 		case <-peerDiscoveryTicker.C:
-			go d.regularPeerDiscovery()
+			go d.withRecover(d.regularPeerDiscovery)
 		case <-bootnodeDiscoveryTicker.C:
-			go d.bootnodePeerDiscovery()
+			go d.withRecover(d.bootnodePeerDiscovery)
 		}
 	}
+}
+
+// withRecover runs a discovery round so that a panic caused by a peer's
+// reply is logged instead of taking the whole node down.
+func (d *DiscoveryService) withRecover(fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			d.logger.Error("recovered from panic in peer discovery", "err", r)
+		}
+	}()
+
+	fn()
 }
 
 // regularPeerDiscovery grabs a random peer from the list of

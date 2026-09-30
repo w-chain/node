@@ -66,7 +66,9 @@ func (i *backendIBFT) InsertProposal(
 	copy(extraDataBackup, extraDataOriginal)
 
 	// Push the committed seals to the header
-	header, err := i.currentSigner.WriteCommittedSeals(newBlock.Header, proposal.Round, committedSealsMap)
+	m := i.modules()
+
+	header, err := m.signer.WriteCommittedSeals(newBlock.Header, proposal.Round, committedSealsMap)
 	if err != nil {
 		i.logger.Error("cannot write committed seals", "err", err)
 
@@ -112,12 +114,12 @@ func (i *backendIBFT) InsertProposal(
 		"block committed",
 		"number", newBlock.Number(),
 		"hash", newBlock.Hash(),
-		"validation_type", i.currentSigner.Type(),
-		"validators", i.currentValidators.Len(),
+		"validation_type", m.signer.Type(),
+		"validators", m.validators.Len(),
 		"committed", len(committedSeals),
 	)
 
-	if err := i.currentHooks.PostInsertBlock(newBlock); err != nil {
+	if err := m.hooks.PostInsertBlock(newBlock); err != nil {
 		i.logger.Error(
 			"failed to call PostInsertBlock hook",
 			"height", newBlock.Number(),
@@ -134,11 +136,11 @@ func (i *backendIBFT) InsertProposal(
 }
 
 func (i *backendIBFT) ID() []byte {
-	return i.currentSigner.Address().Bytes()
+	return i.modules().signer.Address().Bytes()
 }
 
 func (i *backendIBFT) MaximumFaultyNodes() uint64 {
-	return uint64(CalcMaxFaultyNodes(i.currentValidators))
+	return uint64(CalcMaxFaultyNodes(i.modules().validators))
 }
 
 // DISCLAIMER: IBFT will be deprecated so we set 1 as a voting power to all validators
@@ -195,7 +197,10 @@ func (i *backendIBFT) buildBlock(parent *types.Header) (*types.Block, error) {
 		header.BaseFee = baseFee
 	}
 
-	if err := i.currentHooks.ModifyHeader(header, i.currentSigner.Address()); err != nil {
+	// One snapshot for the whole build, so the block uses one height's modules.
+	m := i.modules()
+
+	if err := m.hooks.ModifyHeader(header, m.signer.Address()); err != nil {
 		return nil, err
 	}
 
@@ -208,9 +213,9 @@ func (i *backendIBFT) buildBlock(parent *types.Header) (*types.Block, error) {
 		return nil, err
 	}
 
-	i.currentSigner.InitIBFTExtra(header, i.currentValidators, parentCommittedSeals)
+	m.signer.InitIBFTExtra(header, m.validators, parentCommittedSeals)
 
-	transition, err := i.executor.BeginTxn(parent.StateRoot, header, i.currentSigner.Address())
+	transition, err := i.executor.BeginTxn(parent.StateRoot, header, m.signer.Address())
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +253,7 @@ func (i *backendIBFT) buildBlock(parent *types.Header) (*types.Block, error) {
 	})
 
 	// write the seal of the block after all the fields are completed
-	header, err = i.currentSigner.WriteProposerSeal(header)
+	header, err = m.signer.WriteProposerSeal(header)
 	if err != nil {
 		return nil, err
 	}
@@ -314,7 +319,7 @@ func (i *backendIBFT) writeTransactions(
 ) (executed []*types.Transaction) {
 	executed = make([]*types.Transaction, 0)
 
-	if !i.currentHooks.ShouldWriteTransactions(blockNumber) {
+	if !i.modules().hooks.ShouldWriteTransactions(blockNumber) {
 		return
 	}
 

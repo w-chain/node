@@ -84,12 +84,14 @@ func (i *backendIBFT) IsValidProposal(rawProposal []byte) bool {
 		return false
 	}
 
+	m := i.modules()
+
 	if err := i.verifyHeaderImpl(
 		latestHeader,
 		newBlock.Header,
-		i.currentSigner,
-		i.currentValidators,
-		i.currentHooks,
+		m.signer,
+		m.validators,
+		m.hooks,
 		true,
 	); err != nil {
 		i.logger.Error("block header verification failed", "err", err)
@@ -111,7 +113,7 @@ func (i *backendIBFT) IsValidProposal(rawProposal []byte) bool {
 		return false
 	}
 
-	if err := i.currentHooks.VerifyBlock(newBlock); err != nil {
+	if err := m.hooks.VerifyBlock(newBlock); err != nil {
 		i.logger.Error("additional block verification failed", "err", err)
 
 		return false
@@ -132,7 +134,7 @@ func (i *backendIBFT) IsValidValidator(msg *protoIBFT.Message) bool {
 		return false
 	}
 
-	signerAddress, err := i.currentSigner.EcrecoverFromIBFTMessage(
+	signerAddress, err := i.modules().signer.EcrecoverFromIBFTMessage(
 		msg.Signature,
 		msgNoSig,
 	)
@@ -189,7 +191,7 @@ func (i *backendIBFT) IsProposer(id []byte, height, round uint64) bool {
 	}
 
 	nextProposer := CalcProposer(
-		i.currentValidators,
+		i.modules().validators,
 		round,
 		previousProposer,
 	)
@@ -198,6 +200,10 @@ func (i *backendIBFT) IsProposer(id []byte, height, round uint64) bool {
 }
 
 func (i *backendIBFT) IsValidProposalHash(proposal *protoIBFT.Proposal, hash []byte) bool {
+	if proposal == nil {
+		return false
+	}
+
 	proposalHash, err := i.calculateProposalHashFromBlockBytes(proposal.RawProposal, &proposal.Round)
 	if err != nil {
 		return false
@@ -210,8 +216,10 @@ func (i *backendIBFT) IsValidCommittedSeal(
 	proposalHash []byte,
 	committedSeal *messages.CommittedSeal,
 ) bool {
-	err := i.currentSigner.VerifyCommittedSeal(
-		i.currentValidators,
+	m := i.modules()
+
+	err := m.signer.VerifyCommittedSeal(
+		m.validators,
 		types.BytesToAddress(committedSeal.Signer),
 		committedSeal.Signature,
 		proposalHash,

@@ -942,6 +942,13 @@ func (p *TxPool) addGossipTx(obj interface{}, _ peer.ID) {
 		return
 	}
 
+	// Bound the work before decoding: the decoder allocates per RLP item.
+	if err := types.CheckRawTx(raw.Raw.Value); err != nil {
+		p.logger.Debug("dropping oversized gossip transaction", "err", err)
+
+		return
+	}
+
 	tx := new(types.Transaction)
 
 	// decode tx

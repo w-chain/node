@@ -13,6 +13,7 @@ import (
 	"github.com/armon/go-metrics"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
+	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
 	rawGrpc "google.golang.org/grpc"
 
 	peerEvent "github.com/w-chain-team/node/network/event"
@@ -119,6 +120,12 @@ func NewServer(logger hclog.Logger, config *Config) (*Server, error) {
 	}
 
 	host, err := libp2p.New(
+		// TCP only. Without this option libp2p also installs its default QUIC,
+		// WebTransport and WebSocket transports: the node never listens on
+		// them but would still dial them when a peer advertises such an
+		// address, which reaches the known webtransport-go and quic-go
+		// denial-of-service bugs (audit N-M1).
+		libp2p.Transport(tcp.NewTCPTransport),
 		// Use noise as the encryption protocol
 		libp2p.Security(noise.ID, noise.New),
 		libp2p.ListenAddrs(listenAddr),

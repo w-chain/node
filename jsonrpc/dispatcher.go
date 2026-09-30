@@ -116,6 +116,7 @@ func (d *Dispatcher) registerEndpoints(store JSONRPCStore) error {
 		store,
 	}
 	d.endpoints.Debug = NewDebug(store, d.params.concurrentRequestsDebug)
+	d.endpoints.Debug.gasCap = d.params.gasCap
 
 	var err error
 
@@ -164,6 +165,9 @@ func (d *Dispatcher) getFnHandler(req Request) (*serviceData, *funcData, Error) 
 	return service, fd, nil
 }
 
+// maxWSSubscriptionsPerConn caps the subscriptions one WS connection may hold.
+const maxWSSubscriptionsPerConn = 100
+
 type wsConn interface {
 	WriteMessage(messageType int, data []byte) error
 	GetFilterID() string
@@ -202,6 +206,11 @@ func (d *Dispatcher) handleSubscribe(req Request, conn wsConn) (string, Error) {
 	subscribeMethod, ok := params[0].(string)
 	if !ok {
 		return "", NewSubscriptionNotFoundError(subscribeMethod)
+	}
+
+	// Each subscription costs memory and work on every block (audit P2-M1).
+	if d.filterManager.WsFilterCount(conn) >= maxWSSubscriptionsPerConn {
+		return "", NewInvalidRequestError("too many subscriptions on this connection")
 	}
 
 	var filterID string

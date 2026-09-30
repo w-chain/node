@@ -18,8 +18,16 @@ const (
 	syncerProto = "/syncer/0.2"
 )
 
+const (
+	// syncRateWindow and minBlocksPerSyncWindow set the slowest stream a
+	// peer may keep open during bulk sync.
+	syncRateWindow         = 30 * time.Second
+	minBlocksPerSyncWindow = 10
+)
+
 var (
-	errTimeout = errors.New("timeout awaiting block from peer")
+	errTimeout      = errors.New("timeout awaiting block from peer")
+	errSlowSyncPeer = errors.New("peer is sending blocks too slowly")
 )
 
 // XXX: Don't use this syncer for the consensus that may cause fork.
@@ -35,6 +43,9 @@ type syncer struct {
 
 	// Timeout for syncing a block
 	blockTimeout time.Duration
+
+	// syncRateWindow overrides the default rate window (tests only).
+	syncRateWindow time.Duration
 
 	// Channel to notify Sync that a new status arrived
 	newStatusCh chan struct{}
@@ -208,6 +219,15 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 	return nil
 }
 
+// rateWindow is the window over which a sync peer's rate is checked.
+func (s *syncer) rateWindow() time.Duration {
+	if s.syncRateWindow > 0 {
+		return s.syncRateWindow
+	}
+
+	return syncRateWindow
+}
+
 // bulkSyncWithPeer syncs block with a given peer
 func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 	newBlockCallback func(*types.FullBlock) bool) (uint64, bool, error) {
@@ -237,11 +257,34 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 
 	var lastReceivedNumber uint64
 
+	// A peer streams blocks it already has, so an honest stream is fast. One
+	// that claims a high block but sends just under the per-block timeout
+	// held this node behind indefinitely (audit S-M1): require a minimum rate
+	// and let the caller move on to another peer. Written blocks are kept.
+	// Only time spent waiting on the peer counts, so slow execution of heavy
+	// blocks on this side never gets an honest peer dropped.
+	var (
+		windowWait   time.Duration
+		windowBlocks int
+	)
+
 	for {
+		waitStart := time.Now()
+
 		select {
 		case block, ok := <-blockCh:
 			if !ok {
 				return lastReceivedNumber, shouldTerminate, nil
+			}
+
+			windowWait += time.Since(waitStart)
+
+			if windowBlocks++; windowWait >= s.rateWindow() {
+				if windowBlocks < minBlocksPerSyncWindow {
+					return lastReceivedNumber, shouldTerminate, errSlowSyncPeer
+				}
+
+				windowWait, windowBlocks = 0, 0
 			}
 
 			// safe check

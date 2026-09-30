@@ -3,6 +3,7 @@ package ibft
 import (
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/w-chain-team/node/blockchain"
@@ -78,10 +79,8 @@ type backendIBFT struct {
 	transport      transport              // Reference to the transport protocol
 
 	// Dynamic References
-	forkManager       forkManagerInterface  // Manager to hold IBFT Forks
-	currentSigner     signer.Signer         // Signer at current sequence
-	currentValidators validators.Validators // signer at current sequence
-	currentHooks      fork.HooksInterface   // Hooks at current sequence
+	forkManager    forkManagerInterface        // Manager to hold IBFT Forks
+	currentModules atomic.Pointer[ibftModules] // Signer, validators and hooks at current sequence
 
 	// Configurations
 	config             *consensus.Config // Consensus configuration
@@ -191,7 +190,7 @@ func (i *backendIBFT) Initialize() error {
 		return err
 	}
 
-	i.logger.Info("validator key", "addr", i.currentSigner.Address().String())
+	i.logger.Info("validator key", "addr", i.modules().signer.Address().String())
 
 	i.consensus = newIBFT(
 		i.logger.Named("consensus"),
@@ -208,7 +207,7 @@ func (i *backendIBFT) Initialize() error {
 // sync runs the syncer in the background to receive blocks from advanced peers
 func (i *backendIBFT) startSyncing() {
 	callInsertBlockHook := func(fullBlock *types.FullBlock) bool {
-		if err := i.currentHooks.PostInsertBlock(fullBlock.Block); err != nil {
+		if err := i.modules().hooks.PostInsertBlock(fullBlock.Block); err != nil {
 			i.logger.Error("failed to call PostInsertBlock", "height", fullBlock.Block.Header.Number, "error", err)
 		}
 
@@ -297,7 +296,7 @@ func (i *backendIBFT) startConsensus() {
 		}
 
 		// Update the No.of validator metric
-		metrics.SetGauge([]string{consensusMetrics, "validators"}, float32(i.currentValidators.Len()))
+		metrics.SetGauge([]string{consensusMetrics, "validators"}, float32(i.modules().validators.Len()))
 
 		isValidator = i.isActiveValidator()
 
@@ -330,7 +329,9 @@ func (i *backendIBFT) startConsensus() {
 
 // isActiveValidator returns whether my signer belongs to current validators
 func (i *backendIBFT) isActiveValidator() bool {
-	return i.currentValidators.Includes(i.currentSigner.Address())
+	m := i.modules()
+
+	return m.validators.Includes(m.signer.Address())
 }
 
 // updateMetrics will update various metrics based on the given block
@@ -377,6 +378,12 @@ func (i *backendIBFT) verifyHeaderImpl(
 
 	if i.isWChainV108(header.Number) {
 		if err := verifyV108Header(parent, header, i.blockchain.CalculateBaseFee(parent)); err != nil {
+			return err
+		}
+	}
+
+	if i.isWChainV109(header.Number) {
+		if err := verifyV109Header(header); err != nil {
 			return err
 		}
 	}
@@ -574,20 +581,40 @@ func (i *backendIBFT) FilterExtra(extra []byte) ([]byte, error) {
 // that are used at specified height
 // by fetching from ForkManager
 func (i *backendIBFT) updateCurrentModules(height uint64) error {
-	lastSigner := i.currentSigner
+	lastSigner := i.modules().signer
 
 	signer, validators, hooks, err := getModulesFromForkManager(i.forkManager, height)
 	if err != nil {
 		return err
 	}
 
-	i.currentSigner = signer
-	i.currentValidators = validators
-	i.currentHooks = hooks
+	// Publish the three together in one atomic step. They used to be three
+	// plain fields written here while the gossip and consensus goroutines
+	// read them, a data race that could pair one height's signer with another
+	// height's validator set (audit C-H1).
+	i.currentModules.Store(&ibftModules{signer: signer, validators: validators, hooks: hooks})
 
 	i.logFork(lastSigner, signer)
 
 	return nil
+}
+
+// ibftModules is the signer, validator set and hooks for one sequence. A
+// value is never modified after it is published.
+type ibftModules struct {
+	signer     signer.Signer
+	validators validators.Validators
+	hooks      fork.HooksInterface
+}
+
+// modules returns the current modules. Callers that use more than one of
+// them should take a single snapshot so they all belong to the same height.
+func (i *backendIBFT) modules() *ibftModules {
+	if m := i.currentModules.Load(); m != nil {
+		return m
+	}
+
+	return &ibftModules{}
 }
 
 // logFork logs validation type switch

@@ -1,6 +1,7 @@
 package ibft
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -65,6 +66,12 @@ func TestVerifyV108Proposal(t *testing.T) {
 	// H4: far-future timestamps stall the next proposers.
 	require.ErrorIs(t, verifyV108Proposal(block(10_000+uint64(maxFutureBlockTime.Seconds())+1), now),
 		errTimestampTooFarAhead)
+
+	// E-C3: timestamps above MaxInt64 turned negative in the old signed
+	// comparison and were accepted, halting the chain for good.
+	for _, ts := range []uint64{math.MaxUint64, math.MaxInt64 + 1, math.MaxInt64} {
+		require.ErrorIs(t, verifyV108Proposal(block(ts), now), errTimestampTooFarAhead, ts)
+	}
 
 	// M2: system state transactions are never valid in IBFT blocks.
 	require.ErrorIs(t, verifyV108Proposal(block(10_002, legacy, state), now), errStateTxNotAllowed)

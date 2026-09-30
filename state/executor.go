@@ -476,7 +476,23 @@ func (t *Transition) nonceCheck(msg *types.Transaction) error {
 // checkDynamicFees checks correctness of the EIP-1559 feature-related fields.
 // Basically, makes sure gas tip cap and gas fee cap are good for dynamic and legacy transactions
 func (t *Transition) checkDynamicFees(msg *types.Transaction) error {
-	return GetLondonFixHandler(uint64(t.ctx.Number)).checkDynamicFees(msg, t)
+	if err := GetLondonFixHandler(uint64(t.ctx.Number)).checkDynamicFees(msg, t); err != nil {
+		return err
+	}
+
+	// From WChainV109 every paying transaction must offer at least the base
+	// fee. Before it, a dynamic-fee tx with zero fee cap and tip skipped the
+	// check: a proposer could include one, the sender paid nothing, and the
+	// burn and coinbase were still credited — coins minted from nothing
+	// (audit E-H2). eth_call does not come through here (NonPayable).
+	if t.config.WChainV109 && t.config.London && t.ctx.BaseFee != nil {
+		if feeCap := msg.GetGasFeeCap(); feeCap == nil || feeCap.Cmp(t.ctx.BaseFee) < 0 {
+			return fmt.Errorf("%w: address %v, GasFeeCap/GasPrice: %v, BaseFee: %s", ErrFeeCapTooLow,
+				msg.From.String(), feeCap, t.ctx.BaseFee)
+		}
+	}
+
+	return nil
 }
 
 // errors that can originate in the consensus rules checks of the apply method below

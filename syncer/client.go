@@ -43,6 +43,11 @@ type syncPeerClient struct {
 
 	peerStatusUpdateChLock   sync.Mutex
 	peerStatusUpdateChClosed bool
+
+	// blockStreamCancels stops a peer's GetBlocks pipeline when its stream is
+	// closed, even if the consumer stopped reading mid-stream.
+	blockStreamCancelsLock sync.Mutex
+	blockStreamCancels     map[peer.ID]context.CancelFunc
 }
 
 func NewSyncPeerClient(
@@ -289,7 +294,32 @@ func (m *syncPeerClient) startPeerEventProcess() {
 
 // CloseStream closes stream
 func (m *syncPeerClient) CloseStream(peerID peer.ID) error {
+	m.setBlockStreamCancel(peerID, nil)
+
 	return m.network.CloseProtocolStream(syncerProto, peerID)
+}
+
+// setBlockStreamCancel stops the peer's previous GetBlocks pipeline, if any,
+// and records cancel (nil to just stop it).
+func (m *syncPeerClient) setBlockStreamCancel(peerID peer.ID, cancel context.CancelFunc) {
+	m.blockStreamCancelsLock.Lock()
+	defer m.blockStreamCancelsLock.Unlock()
+
+	if prev := m.blockStreamCancels[peerID]; prev != nil {
+		prev()
+	}
+
+	if cancel == nil {
+		delete(m.blockStreamCancels, peerID)
+
+		return
+	}
+
+	if m.blockStreamCancels == nil {
+		m.blockStreamCancels = make(map[peer.ID]context.CancelFunc)
+	}
+
+	m.blockStreamCancels[peerID] = cancel
 }
 
 // GetBlocks returns a stream of blocks from given height to peer's latest
@@ -305,6 +335,11 @@ func (m *syncPeerClient) GetBlocks(
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Before this, a consumer that stopped reading (e.g. after a block failed
+	// verification) left both pipeline goroutines blocked on a send forever,
+	// holding their blocks: a peer could repeat it to exhaust memory (S-H1).
+	m.setBlockStreamCancel(peerID, cancel)
+
 	stream, err := clt.GetBlocks(ctx, &proto.GetBlocksRequest{
 		From: from,
 	})
@@ -315,7 +350,7 @@ func (m *syncPeerClient) GetBlocks(
 	}
 
 	// input channel
-	streamBlockCh, streamErrorCh := blockStreamToChannel(stream)
+	streamBlockCh, streamErrorCh := blockStreamToChannel(ctx, stream)
 
 	// output channel
 	blockCh := make(chan *types.Block, 1)
@@ -331,7 +366,13 @@ func (m *syncPeerClient) GetBlocks(
 					return
 				}
 
-				blockCh <- block
+				select {
+				case blockCh <- block:
+				case <-ctx.Done():
+					return
+				}
+			case <-ctx.Done():
+				return
 			case err := <-streamErrorCh:
 				m.logger.Error("failed to get block from gRPC stream", "peer", peerID, "err", err)
 
@@ -361,6 +402,11 @@ func (m *syncPeerClient) newSyncPeerClient(peerID peer.ID) (proto.SyncPeerClient
 
 // fromProto gets block from gRPC response data
 func fromProto(protoBlock *proto.Block) (*types.Block, error) {
+	// A peer controls these bytes; bound the decoder's allocations first.
+	if err := types.CheckRLPDensity(protoBlock.Block); err != nil {
+		return nil, err
+	}
+
 	block := &types.Block{}
 	if err := block.UnmarshalRLP(protoBlock.Block); err != nil {
 		return nil, err
@@ -369,7 +415,10 @@ func fromProto(protoBlock *proto.Block) (*types.Block, error) {
 	return block, nil
 }
 
-func blockStreamToChannel(stream proto.SyncPeer_GetBlocksClient) (<-chan *types.Block, <-chan error) {
+func blockStreamToChannel(
+	ctx context.Context,
+	stream proto.SyncPeer_GetBlocksClient,
+) (<-chan *types.Block, <-chan error) {
 	blockCh := make(chan *types.Block)
 	errorCh := make(chan error, 1)
 
@@ -399,7 +448,11 @@ func blockStreamToChannel(stream proto.SyncPeer_GetBlocksClient) (<-chan *types.
 
 			metrics.SetGauge([]string{syncerMetrics, "ingress_bytes"}, float32(len(protoBlock.Block)))
 
-			blockCh <- block
+			select {
+			case blockCh <- block:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 

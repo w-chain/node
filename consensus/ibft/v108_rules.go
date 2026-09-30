@@ -45,7 +45,11 @@ func verifyV108Header(parent, header *types.Header, expectedBaseFee uint64) erro
 // clock check stays out of block import on purpose: a syncing node with a slow
 // clock must never refuse a block the validators already finalized.
 func verifyV108Proposal(block *types.Block, now time.Time) error {
-	if time.Unix(int64(block.Header.Timestamp), 0).After(now.Add(maxFutureBlockTime)) {
+	// Compare as unsigned: casting a timestamp above MaxInt64 to int64 gives a
+	// negative (past) time, which let a MaxUint64 timestamp through and left
+	// the chain unable to produce any later block.
+	limit := now.Add(maxFutureBlockTime).Unix()
+	if limit < 0 || block.Header.Timestamp > uint64(limit) {
 		return errTimestampTooFarAhead
 	}
 

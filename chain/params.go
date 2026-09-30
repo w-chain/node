@@ -130,6 +130,13 @@ const (
 	// only be set once every validator runs v1.0.8. Older binaries refuse to
 	// start with such a genesis instead of silently following other rules.
 	WChainV108 = "wchainv108"
+
+	// WChainV109 switches on the second round of v1.0.8 rule fixes: per-key
+	// pricing for the BLS precompiles, EIP-2565 modexp pricing, no zero-fee
+	// shortcut for dynamic-fee transactions, spec-correct BYTE, and a bounded
+	// header timestamp. It is a separate key because WChainV108 is already
+	// active on testnet; on a chain crossing both fresh, both may use one block.
+	WChainV109 = "wchainv109"
 )
 
 // Forks is map which contains all forks and their starting blocks from genesis
@@ -168,6 +175,7 @@ func (f *Forks) At(block uint64) ForksInTime {
 		QuorumCalcAlignment: f.IsActive(QuorumCalcAlignment, block),
 		TxHashWithType:      f.IsActive(TxHashWithType, block),
 		LondonFix:           f.IsActive(LondonFix, block),
+		WChainV109:          f.IsActive(WChainV109, block),
 	}
 }
 
@@ -220,7 +228,8 @@ type ForksInTime struct {
 	EIP155,
 	QuorumCalcAlignment,
 	TxHashWithType,
-	LondonFix bool
+	LondonFix,
+	WChainV109 bool
 }
 
 // AllForksEnabled should contain all supported forks by current edge version
@@ -238,4 +247,5 @@ var AllForksEnabled = &Forks{
 	TxHashWithType:      NewFork(0),
 	LondonFix:           NewFork(0),
 	WChainV108:          NewFork(0),
+	WChainV109:          NewFork(0),
 }

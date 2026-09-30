@@ -190,13 +190,52 @@ var wsUpgrader = websocket.Upgrader{
 	WriteBufferSize: 1024,
 }
 
-// wsWrapper is a wrapping object for the web socket connection and logger
-type wsWrapper struct {
-	sync.Mutex
+const (
+	// wsSendQueueSize is how many outgoing messages one WS connection may
+	// have waiting. A client that falls this far behind is disconnected.
+	wsSendQueueSize = 256
 
+	// wsWriteTimeout bounds a single write to a WS client.
+	wsWriteTimeout = 10 * time.Second
+)
+
+// errWSClientTooSlow wraps net.ErrClosed so the filter manager drops the
+// subscriptions of a client that stopped reading.
+var errWSClientTooSlow = fmt.Errorf("%w: websocket client is not reading", net.ErrClosed)
+
+type wsOutMessage struct {
+	messageType int
+	data        []byte
+}
+
+// wsWrapper is a wrapping object for the web socket connection and logger.
+//
+// Writes go through a per-connection queue drained by its own goroutine, so a
+// client that stops reading can never block the caller. Before this, the
+// filter manager wrote to clients directly with no deadline: one silent
+// subscriber blocked its loop, which filled the blockchain event stream and
+// froze block import on the node (audit P2-C3).
+type wsWrapper struct {
 	ws       *websocket.Conn // the actual WS connection
 	logger   hclog.Logger    // module logger
 	filterID string          // filter ID
+
+	sendCh    chan wsOutMessage
+	closeCh   chan struct{}
+	closeOnce sync.Once
+}
+
+func newWSWrapper(ws *websocket.Conn, logger hclog.Logger) *wsWrapper {
+	w := &wsWrapper{
+		ws:      ws,
+		logger:  logger,
+		sendCh:  make(chan wsOutMessage, wsSendQueueSize),
+		closeCh: make(chan struct{}),
+	}
+
+	go w.writeLoop()
+
+	return w
 }
 
 func (w *wsWrapper) SetFilterID(filterID string) {
@@ -207,19 +246,52 @@ func (w *wsWrapper) GetFilterID() string {
 	return w.filterID
 }
 
-// WriteMessage writes out the message to the WS peer
+// WriteMessage queues the message for the WS peer without blocking.
 func (w *wsWrapper) WriteMessage(messageType int, data []byte) error {
-	w.Lock()
-	defer w.Unlock()
-	writeErr := w.ws.WriteMessage(messageType, data)
-
-	if writeErr != nil {
-		w.logger.Error(
-			fmt.Sprintf("Unable to write WS message, %s", writeErr.Error()),
-		)
+	select {
+	case <-w.closeCh:
+		return net.ErrClosed
+	default:
 	}
 
-	return writeErr
+	select {
+	case w.sendCh <- wsOutMessage{messageType: messageType, data: data}:
+		return nil
+	case <-w.closeCh:
+		return net.ErrClosed
+	default:
+		w.logger.Warn("disconnecting websocket client that is not reading its messages")
+		w.close()
+
+		return errWSClientTooSlow
+	}
+}
+
+func (w *wsWrapper) writeLoop() {
+	for {
+		select {
+		case <-w.closeCh:
+			return
+		case msg := <-w.sendCh:
+			_ = w.ws.SetWriteDeadline(time.Now().Add(wsWriteTimeout))
+
+			if err := w.ws.WriteMessage(msg.messageType, msg.data); err != nil {
+				w.logger.Error(fmt.Sprintf("Unable to write WS message, %s", err.Error()))
+				w.close()
+
+				return
+			}
+		}
+	}
+}
+
+// close stops the writer and closes the connection, which also ends the read
+// loop in handleWs and removes the client's subscriptions.
+func (w *wsWrapper) close() {
+	w.closeOnce.Do(func() {
+		close(w.closeCh)
+		_ = w.ws.Close()
+	})
 }
 
 // isSupportedWSType returns a status indicating if the message type is supported
@@ -245,17 +317,8 @@ func (j *JSONRPC) handleWs(w http.ResponseWriter, req *http.Request) {
 		ws.SetReadLimit(int64(j.config.WebSocketReadLimit))
 	}
 
-	// Defer WS closure
-	defer func(ws *websocket.Conn) {
-		err = ws.Close()
-		if err != nil {
-			j.logger.Error(
-				fmt.Sprintf("Unable to gracefully close WS connection, %s", err.Error()),
-			)
-		}
-	}(ws)
-
-	wrapConn := &wsWrapper{ws: ws, logger: j.logger}
+	wrapConn := newWSWrapper(ws, j.logger)
+	defer wrapConn.close()
 
 	j.logger.Info("Websocket connection established")
 	// Run the listen loop

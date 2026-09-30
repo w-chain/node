@@ -53,6 +53,11 @@ func unmarshalRLPFrom(p *fastrlp.Parser, v *fastrlp.Value, cb unmarshalRLPFromFu
 
 			// Then we increment element number in order to go to the actual tx data raw below.
 			i++
+
+			// A type prefix at the end of the list has no body to go with it.
+			if i >= len(elems) {
+				return fmt.Errorf("transaction type %d is missing its body", txType)
+			}
 		}
 
 		if err = cb(txType, p, elems[i]); err != nil {

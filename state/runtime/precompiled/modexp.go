@@ -16,6 +16,8 @@ type modExp struct {
 
 var (
 	big1      = big.NewInt(1)
+	big3      = big.NewInt(3)
+	big7      = big.NewInt(7)
 	big4      = big.NewInt(4)
 	big8      = big.NewInt(8)
 	big16     = big.NewInt(16)
@@ -118,6 +120,10 @@ func (m *modExp) gas(input []byte, config *chain.ForksInTime) uint64 {
 		gasCost.Set(baseLen)
 	}
 
+	if config != nil && config.WChainV109 {
+		return modExpGasEIP2565(gasCost, adjustedExponentLength(expLen, expHead))
+	}
+
 	gasCost = multComplexity(gasCost)
 
 	// a = a * max(ADJUSTED_EXPONENT_LENGTH, 1)
@@ -137,6 +143,32 @@ func (m *modExp) gas(input []byte, config *chain.ForksInTime) uint64 {
 	}
 
 	return gasCost.Uint64()
+}
+
+// modExpGasEIP2565 prices modexp as in EIP-2565 (and geth), used from
+// WChainV109. The older EIP-198 formula made a 1-byte modulus with a long
+// exponent cost ~260 ns per gas, enough to stall proposers (audit E-H1).
+func modExpGasEIP2565(maxLen, adjExpLen *big.Int) uint64 {
+	// mult_complexity = ceil(max_length / 8) ^ 2
+	gas := new(big.Int).Add(maxLen, big7)
+	gas.Div(gas, big8)
+	gas.Mul(gas, gas)
+
+	if adjExpLen.Cmp(big1) > 0 {
+		gas.Mul(gas, adjExpLen)
+	}
+
+	gas.Div(gas, big3)
+
+	if !gas.IsUint64() {
+		return math.MaxUint64
+	}
+
+	if gas.Uint64() < 200 {
+		return 200
+	}
+
+	return gas.Uint64()
 }
 
 func (m *modExp) run(input []byte, _ types.Address, _ runtime.Host) ([]byte, error) {

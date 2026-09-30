@@ -18,6 +18,11 @@ const callTracerName = "callTracer"
 var (
 	defaultTraceTimeout = 5 * time.Second
 
+	// maxTraceTimeout caps the timeout a caller may ask for. It used to be
+	// taken from the request as is, so one debug_* call could keep the EVM
+	// busy for as long as the caller liked (audit R-M1).
+	maxTraceTimeout = 30 * time.Second
+
 	// ErrExecutionTimeout indicates the execution was terminated due to timeout
 	ErrExecutionTimeout = errors.New("execution timeout")
 	// ErrTraceGenesisBlock is an error returned when tracing genesis block which can't be traced
@@ -70,6 +75,9 @@ type debugStore interface {
 type Debug struct {
 	store      debugStore
 	throttling *Throttling
+
+	// gasCap bounds debug_traceCall like eth_call (0 disables).
+	gasCap uint64
 }
 
 func NewDebug(store debugStore, requestsPerSecond uint64) *Debug {
@@ -201,6 +209,8 @@ func (d *Debug) TraceCall(
 				tx.Gas = header.GasLimit
 			}
 
+			tx.Gas = capCallGas(tx.Gas, d.gasCap)
+
 			tracer, cancel, err := newTracer(config)
 			if err != nil {
 				return nil, err
@@ -231,6 +241,15 @@ func (d *Debug) traceBlock(
 	return d.store.TraceBlock(block, tracer)
 }
 
+// clampTraceTimeout limits a caller-supplied trace timeout to maxTraceTimeout.
+func clampTraceTimeout(timeout time.Duration) time.Duration {
+	if timeout > maxTraceTimeout {
+		return maxTraceTimeout
+	}
+
+	return timeout
+}
+
 // newTracer creates new tracer by config
 func newTracer(config *TraceConfig) (
 	tracer.Tracer,
@@ -250,6 +269,8 @@ func newTracer(config *TraceConfig) (
 		if timeout, err = time.ParseDuration(*config.Timeout); err != nil {
 			return nil, nil, err
 		}
+
+		timeout = clampTraceTimeout(timeout)
 	}
 
 	var tracer tracer.Tracer

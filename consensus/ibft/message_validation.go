@@ -96,6 +96,12 @@ func validateMessage(msg *proto.Message, depth int) error {
 		}
 
 		if pc := p.RoundChangeData.LatestPreparedCertificate; pc != nil {
+			// go-ibft checks the certificate against this proposal and
+			// dereferences it. Honest nodes always send the two together.
+			if p.RoundChangeData.LastPreparedProposal == nil {
+				return errMissingProposal
+			}
+
 			// A nil proposal message is rejected by go-ibft's validPC, so only
 			// validate it when present.
 			if pc.ProposalMessage != nil {

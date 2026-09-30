@@ -131,6 +131,11 @@ func (s *Server) CloseProtocolStream(protocol string, peerID peer.ID) error {
 
 // AddToPeerStore adds peer information to the node's peer store
 func (s *Server) AddToPeerStore(peerInfo *peer.AddrInfo) {
+	// A peer can hand us a bare /p2p/<id> entry with no address at all.
+	if peerInfo == nil || len(peerInfo.Addrs) == 0 {
+		return
+	}
+
 	s.host.Peerstore().AddAddr(peerInfo.ID, peerInfo.Addrs[0], peerstore.AddressTTL)
 }
 

@@ -31,9 +31,23 @@ var (
 type blsAggSignsVerification struct {
 }
 
+const (
+	blsAggSigsBaseGas = 150000
+
+	// blsAggSigsGasPerWord prices the input from WChainV109. Verification work
+	// grows with the number of public keys, and so does the input (each key is
+	// several words). A flat price let one call verify thousands of keys for
+	// 150,000 gas and freeze the proposer for seconds (audit E-C2).
+	blsAggSigsGasPerWord = 1000
+)
+
 // gas returns the gas required to execute the pre-compiled contract
-func (c *blsAggSignsVerification) gas(input []byte, _ *chain.ForksInTime) uint64 {
-	return 150000
+func (c *blsAggSignsVerification) gas(input []byte, config *chain.ForksInTime) uint64 {
+	if config != nil && config.WChainV109 {
+		return blsAggSigsBaseGas + blsAggSigsGasPerWord*((uint64(len(input))+31)/32)
+	}
+
+	return blsAggSigsBaseGas
 }
 
 // Run runs the precompiled contract with the given input.

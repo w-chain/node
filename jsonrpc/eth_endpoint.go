@@ -211,6 +211,10 @@ func (e *Eth) BlockNumber() (interface{}, error) {
 
 // SendRawTransaction sends a raw transaction
 func (e *Eth) SendRawTransaction(buf argBytes) (interface{}, error) {
+	if err := types.CheckRawTx(buf); err != nil {
+		return nil, err
+	}
+
 	tx := &types.Transaction{}
 	if err := tx.UnmarshalRLP(buf); err != nil {
 		return nil, err

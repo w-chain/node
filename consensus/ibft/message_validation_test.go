@@ -31,10 +31,18 @@ func preprepareMsg(rcc *proto.RoundChangeCertificate) *proto.Message {
 	}
 }
 
+// roundChangeMsg builds an honest round change: go-ibft always sends the
+// prepared proposal together with its certificate.
 func roundChangeMsg(pc *proto.PreparedCertificate) *proto.Message {
+	var proposal *proto.Proposal
+	if pc != nil {
+		proposal = &proto.Proposal{RawProposal: []byte{1}}
+	}
+
 	return &proto.Message{
 		View: testView, From: testFrom, Signature: testSig, Type: proto.MessageType_ROUND_CHANGE,
 		Payload: &proto.Message_RoundChangeData{RoundChangeData: &proto.RoundChangeMessage{
+			LastPreparedProposal:      proposal,
 			LatestPreparedCertificate: pc,
 		}},
 	}
@@ -196,4 +204,25 @@ func TestIsValidValidator_NilView(t *testing.T) {
 
 	require.False(t, i.IsValidValidator(nil))
 	require.False(t, i.IsValidValidator(&proto.Message{From: testFrom, Signature: testSig}))
+}
+
+// C-C1: a certificate without its proposal made go-ibft pass a nil proposal
+// to IsValidProposalHash, which dereferenced it and crashed the node.
+func TestValidateIBFTMessage_CertificateWithoutProposal(t *testing.T) {
+	t.Parallel()
+
+	pc := &proto.PreparedCertificate{
+		ProposalMessage: preprepareMsg(nil),
+		PrepareMessages: []*proto.Message{prepareMsg()},
+	}
+
+	rc := roundChangeMsg(pc)
+	rc.GetRoundChangeData().LastPreparedProposal = nil
+
+	require.ErrorIs(t, validateIBFTMessage(rc), errMissingProposal, "top-level round change")
+
+	nested := preprepareMsg(&proto.RoundChangeCertificate{RoundChangeMessages: []*proto.Message{rc}})
+	require.ErrorIs(t, validateIBFTMessage(nested), errMissingProposal, "round change inside a proposal")
+
+	require.False(t, (&backendIBFT{}).IsValidProposalHash(nil, []byte{1}), "nil proposal must not panic")
 }

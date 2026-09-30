@@ -212,6 +212,15 @@ func opByte(c *state) {
 	x := c.pop()
 	y := c.top()
 
+	// From WChainV109 any index outside 0-31 gives 0, as the spec says. Before
+	// it, only the low 64 bits of the index were looked at, so an index of
+	// 2^64+31 returned the last byte instead of 0 (audit E-L1).
+	if c.config.WChainV109 && (!x.IsUint64() || x.Uint64() > 31) {
+		y.Set(zero)
+
+		return
+	}
+
 	indx := x.Int64()
 	if indx > 31 {
 		y.Set(zero)

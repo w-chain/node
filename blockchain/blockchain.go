@@ -1095,29 +1095,39 @@ func (b *Blockchain) verifyGasLimit(header *types.Header, parentHeader *types.He
 
 // GetHashHelper is used by the EVM, so that the SC can get the hash of the header number
 func (b *Blockchain) GetHashHelper(header *types.Header) func(i uint64) (res types.Hash) {
+	// ancestors[k] is the hash of block header.Number-1-k. It fills in once as
+	// deeper hashes are asked for, so repeated BLOCKHASH calls in one block do
+	// not walk the same headers again: a contract looping BLOCKHASH(NUMBER-256)
+	// used to cost up to 255 header reads per 20-gas opcode and could stall a
+	// proposer for minutes. Results are identical to the plain walk.
+	var (
+		lock      sync.Mutex
+		ancestors []types.Hash
+	)
+
 	return func(i uint64) (res types.Hash) {
-		num, hash := header.Number-1, header.ParentHash
+		if header.Number == 0 || i >= header.Number {
+			return
+		}
 
-		for {
-			if num == i {
-				res = hash
+		lock.Lock()
+		defer lock.Unlock()
 
-				return
-			}
+		if len(ancestors) == 0 {
+			ancestors = append(ancestors, header.ParentHash)
+		}
 
-			h, ok := b.GetHeaderByHash(hash)
+		depth := header.Number - 1 - i
+		for uint64(len(ancestors)) <= depth {
+			h, ok := b.GetHeaderByHash(ancestors[len(ancestors)-1])
 			if !ok {
 				return
 			}
 
-			hash = h.ParentHash
-
-			if num == 0 {
-				return
-			}
-
-			num--
+			ancestors = append(ancestors, h.ParentHash)
 		}
+
+		return ancestors[depth]
 	}
 }
 

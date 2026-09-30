@@ -329,6 +329,10 @@ type FilterManager struct {
 	filters  map[string]filter
 	timeouts timeHeapImpl
 
+	// wsFilters indexes subscriptions by connection, so all of a client's
+	// subscriptions are removed when it disconnects, not just the last one.
+	wsFilters map[wsConn]map[string]struct{}
+
 	updateCh chan struct{}
 	closeCh  chan struct{}
 }
@@ -341,6 +345,7 @@ func NewFilterManager(logger hclog.Logger, store filterManagerStore, blockRangeL
 		blockRangeLimit: blockRangeLimit,
 		filters:         make(map[string]filter),
 		timeouts:        timeHeapImpl{},
+		wsFilters:       make(map[wsConn]map[string]struct{}),
 		updateCh:        make(chan struct{}),
 		closeCh:         make(chan struct{}),
 	}
@@ -669,6 +674,16 @@ func (f *FilterManager) removeFilterByID(id string) bool {
 
 	delete(f.filters, id)
 
+	if ws := filter.getFilterBase().ws; ws != nil {
+		if ids := f.wsFilters[ws]; ids != nil {
+			delete(ids, id)
+
+			if len(ids) == 0 {
+				delete(f.wsFilters, ws)
+			}
+		}
+	}
+
 	if removed := f.timeouts.removeFilter(filter.getFilterBase()); removed {
 		f.emitSignalToUpdateCh()
 	}
@@ -676,12 +691,25 @@ func (f *FilterManager) removeFilterByID(id string) bool {
 	return true
 }
 
-// RemoveFilterByWs removes the filter with given WS [Thread safe]
+// RemoveFilterByWs removes every filter of the given WS connection [Thread safe]
 func (f *FilterManager) RemoveFilterByWs(ws wsConn) {
 	f.Lock()
 	defer f.Unlock()
 
+	for id := range f.wsFilters[ws] {
+		f.removeFilterByID(id)
+	}
+
+	// Filters added without the index (none today) are still covered.
 	f.removeFilterByID(ws.GetFilterID())
+}
+
+// WsFilterCount returns how many subscriptions the WS connection holds [Thread safe]
+func (f *FilterManager) WsFilterCount(ws wsConn) int {
+	f.RLock()
+	defer f.RUnlock()
+
+	return len(f.wsFilters[ws])
 }
 
 // refreshFilterTimeout updates the timeout for a filter to the current time
@@ -705,6 +733,18 @@ func (f *FilterManager) addFilter(filter filter) string {
 	base := filter.getFilterBase()
 
 	f.filters[base.id] = filter
+
+	if base.ws != nil {
+		if f.wsFilters == nil {
+			f.wsFilters = make(map[wsConn]map[string]struct{})
+		}
+
+		if f.wsFilters[base.ws] == nil {
+			f.wsFilters[base.ws] = make(map[string]struct{})
+		}
+
+		f.wsFilters[base.ws][base.id] = struct{}{}
+	}
 
 	// Set timeout and add to heap if filter doesn't have web socket connection
 	if !filter.hasWSConn() {
