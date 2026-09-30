@@ -52,6 +52,9 @@ type networkingServer interface {
 
 	// HasFreeConnectionSlot checks if there are available outbound connection slots [Thread safe]
 	HasFreeConnectionSlot(direction network.Direction) bool
+
+	// IsBootnode checks if the peer is one of the configured bootnodes [Thread safe]
+	IsBootnode(peerID peer.ID) bool
 }
 
 // IdentityService is a networking service used to handle peer handshaking.
@@ -93,7 +96,7 @@ func (i *IdentityService) GetNotifyBundle() *network.NotifyBundle {
 				return
 			}
 
-			if !i.baseServer.HasFreeConnectionSlot(conn.Stat().Direction) {
+			if !i.hasSlotFor(peerID, conn.Stat().Direction) {
 				i.disconnectFromPeer(peerID, ErrNoAvailableSlots.Error())
 
 				return
@@ -123,6 +126,19 @@ func (i *IdentityService) GetNotifyBundle() *network.NotifyBundle {
 			}()
 		},
 	}
+}
+
+// hasSlotFor reports whether a new connection may proceed to the handshake.
+// Configured bootnodes (on our networks, the validators) always get an inbound
+// slot: otherwise anyone could hold all inbound slots with throwaway peer IDs
+// and lock them out (audit P2-M4). They are a fixed, short list, so this cannot
+// exceed the limit by more than a few connections.
+func (i *IdentityService) hasSlotFor(peerID peer.ID, direction network.Direction) bool {
+	if direction == network.DirInbound && i.baseServer.IsBootnode(peerID) {
+		return true
+	}
+
+	return i.baseServer.HasFreeConnectionSlot(direction)
 }
 
 // hasPendingStatus checks if a peer is pending handshake [Thread safe]

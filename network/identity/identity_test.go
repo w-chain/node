@@ -122,3 +122,20 @@ func TestHandshake_Errors(t *testing.T) {
 	// Make sure no peers have been  added to the base networking server
 	assert.Len(t, peersArray, 0)
 }
+
+// P2-M4: with every inbound slot taken, bootnodes (our validators) still get
+// in; other peers do not, and outbound dialing keeps its own limit.
+func TestHasSlotFor_BootnodesReserved(t *testing.T) {
+	t.Parallel()
+
+	const bootnode = peer.ID("bootnode")
+
+	identityService := newIdentityService(func(server *networkTesting.MockNetworkingServer) {
+		server.HookHasFreeConnectionSlot(func(network.Direction) bool { return false }) // all full
+		server.HookIsBootnode(func(id peer.ID) bool { return id == bootnode })
+	})
+
+	assert.True(t, identityService.hasSlotFor(bootnode, network.DirInbound), "bootnode gets a reserved inbound slot")
+	assert.False(t, identityService.hasSlotFor("sybil", network.DirInbound), "others are refused when full")
+	assert.False(t, identityService.hasSlotFor(bootnode, network.DirOutbound), "outbound limit unchanged")
+}

@@ -178,6 +178,11 @@ func NewServer(logger hclog.Logger, config *Config) (*Server, error) {
 	return srv, nil
 }
 
+// IsBootnode checks if the peer is one of the configured bootnodes [Thread safe]
+func (s *Server) IsBootnode(peerID peer.ID) bool {
+	return s.bootnodes != nil && s.bootnodes.isBootnode(peerID)
+}
+
 // HasFreeConnectionSlot checks if there are free connection slots in the specified direction [Thread safe]
 func (s *Server) HasFreeConnectionSlot(direction network.Direction) bool {
 	return s.connectionCounts.HasFreeConnectionSlot(direction)

@@ -30,6 +30,7 @@ type MockNetworkingServer struct {
 	emitEventFn              emitEventDelegate
 	isTemporaryDialFn        isTemporaryDialDelegate
 	hasFreeConnectionSlotFn  hasFreeConnectionSlotDelegate
+	isBootnodeFn             func(peer.ID) bool
 
 	// Discovery Hooks
 	newDiscoveryClientFn       newDiscoveryClientDelegate
@@ -168,6 +169,18 @@ func (m *MockNetworkingServer) HasFreeConnectionSlot(direction network.Direction
 	}
 
 	return true
+}
+
+func (m *MockNetworkingServer) IsBootnode(peerID peer.ID) bool {
+	if m.isBootnodeFn != nil {
+		return m.isBootnodeFn(peerID)
+	}
+
+	return false
+}
+
+func (m *MockNetworkingServer) HookIsBootnode(fn func(peer.ID) bool) {
+	m.isBootnodeFn = fn
 }
 
 func (m *MockNetworkingServer) HookHasFreeConnectionSlot(fn hasFreeConnectionSlotDelegate) {
