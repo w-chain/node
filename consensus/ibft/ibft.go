@@ -78,6 +78,9 @@ type backendIBFT struct {
 	operator       *operator              // Reference to the gRPC service of IBFT
 	transport      transport              // Reference to the transport protocol
 
+	// storedMessages bounds what each validator can have go-ibft hold (C-M3).
+	storedMessages storedMessageBudget
+
 	// Dynamic References
 	forkManager    forkManagerInterface        // Manager to hold IBFT Forks
 	currentModules atomic.Pointer[ibftModules] // Signer, validators and hooks at current sequence

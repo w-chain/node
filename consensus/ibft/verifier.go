@@ -129,25 +129,31 @@ func (i *backendIBFT) IsValidValidator(msg *protoIBFT.Message) bool {
 		return false
 	}
 
+	// Messages can arrive before the modules are first loaded at startup.
+	signer := i.modules().signer
+	if signer == nil {
+		return false
+	}
+
 	msgNoSig, err := msg.PayloadNoSig()
 	if err != nil {
 		return false
 	}
 
-	signerAddress, err := i.modules().signer.EcrecoverFromIBFTMessage(
+	signerAddress, err := signer.EcrecoverFromIBFTMessage(
 		msg.Signature,
 		msgNoSig,
 	)
 
 	if err != nil {
-		i.logger.Error("failed to ecrecover message", "err", err)
+		i.logger.Debug("failed to ecrecover message", "err", err)
 
 		return false
 	}
 
 	// verify the signature came from the sender
 	if !bytes.Equal(msg.From, signerAddress.Bytes()) {
-		i.logger.Error(
+		i.logger.Debug(
 			"signer address doesn't match with From",
 			"from", hex.EncodeToString(msg.From),
 			"signer", signerAddress,
@@ -164,7 +170,7 @@ func (i *backendIBFT) IsValidValidator(msg *protoIBFT.Message) bool {
 
 	// verify the sender is in the active validator set
 	if !validators.Includes(signerAddress) {
-		i.logger.Error(
+		i.logger.Debug(
 			"signer address doesn't included in validators",
 			"signer", signerAddress,
 		)

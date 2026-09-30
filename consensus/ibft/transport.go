@@ -34,12 +34,10 @@ func (i *backendIBFT) setupTransport() error {
 		return err
 	}
 
-	// Structurally malformed consensus messages are never honest: drop them
-	// before they are processed here or relayed to peers, so one bad message
-	// no longer fans out across the whole mesh (audit M4). Only the structural
-	// check runs here — not the height window, which depends on this node's
-	// own head and must not stop a lagging node from relaying current traffic.
-	if err := i.network.RegisterTopicValidator(ibftProto, isWellFormedIBFTMessage); err != nil {
+	// Malformed, out-of-window, non-validator or badly signed consensus
+	// messages are dropped before they are processed here or relayed to
+	// peers, so they no longer fan out across the whole mesh (audits M4, C-M1).
+	if err := i.network.RegisterTopicValidator(ibftProto, i.isRelayableIBFTMessage); err != nil {
 		return err
 	}
 
@@ -63,9 +61,18 @@ func (i *backendIBFT) setupTransport() error {
 				return
 			}
 
-			if !isWithinMessageWindow(msg.View, i.blockchain.Header().Number) {
+			head := i.blockchain.Header().Number
+
+			if !isWithinMessageWindow(msg.View, head) {
 				i.logger.Debug("dropping consensus message outside height/round window",
 					"height", msg.View.Height, "round", msg.View.Round)
+
+				return
+			}
+
+			if !i.storedMessages.allow(msg.From, msg.View.Height, head, gproto.Size(msg)) {
+				i.logger.Debug("dropping consensus message: sender over its stored-message budget",
+					"addr", types.BytesToAddress(msg.From), "height", msg.View.Height)
 
 				return
 			}
