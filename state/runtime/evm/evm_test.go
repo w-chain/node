@@ -67,7 +67,7 @@ func (m *mockHost) GetCodeSize(addr types.Address) int {
 }
 
 func (m *mockHost) GetCodeHash(addr types.Address) types.Hash {
-	panic("Not implemented in tests") //nolint:gocritic
+	return types.ZeroHash // no stored code: the EVM analyses the code directly
 }
 
 func (m *mockHost) GetCode(addr types.Address) []byte {

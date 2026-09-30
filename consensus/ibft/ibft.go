@@ -259,18 +259,37 @@ func (i *backendIBFT) startConsensus() {
 	// rounds for a specific height. Whether a given notification is actually
 	// stale is decided in the main loop below, against the height it is
 	// currently building (see isStaleSyncerNotification).
+	// It stops when the node closes or the subscription ends: it used to
+	// block forever sending to a loop that had already returned, and read nil
+	// events from a closed subscription (audit S-L2).
 	go func() {
 		eventCh := newBlockSub.GetEventCh()
 
 		for {
-			ev := <-eventCh
-			if ev.Source != "syncer" || len(ev.NewChain) == 0 {
+			var ev *blockchain.Event
+
+			select {
+			case <-i.closeCh:
+				return
+			case e, ok := <-eventCh:
+				if !ok {
+					return
+				}
+
+				ev = e
+			}
+
+			if ev == nil || ev.Source != "syncer" || len(ev.NewChain) == 0 {
 				continue
 			}
 
 			// A single event can carry several inserted blocks; the last
 			// entry is the new head.
-			syncerBlockCh <- ev.NewChain[len(ev.NewChain)-1].Number
+			select {
+			case syncerBlockCh <- ev.NewChain[len(ev.NewChain)-1].Number:
+			case <-i.closeCh:
+				return
+			}
 		}
 	}()
 

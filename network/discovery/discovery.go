@@ -4,17 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/multiformats/go-multiaddr"
+	manet "github.com/multiformats/go-multiaddr/net"
 	"time"
 
-	"github.com/w-chain-team/node/network/common"
-	"github.com/w-chain-team/node/network/event"
 	"github.com/hashicorp/go-hclog"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/w-chain-team/node/network/common"
+	"github.com/w-chain-team/node/network/event"
 
-	"github.com/w-chain-team/node/network/grpc"
-	"github.com/w-chain-team/node/network/proto"
 	kb "github.com/libp2p/go-libp2p-kbucket"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/w-chain-team/node/network/grpc"
+	"github.com/w-chain-team/node/network/proto"
 )
 
 const (
@@ -190,7 +192,12 @@ func (d *DiscoveryService) addToTable(node *peer.AddrInfo) error {
 }
 
 // addPeersToTable adds the passed in peers to the peer store and the routing table
-func (d *DiscoveryService) addPeersToTable(nodeAddrStrs []string) {
+// addPeersToTable adds the peers another node told us about. A peer on a
+// public address only speaks for the public internet: private, loopback and
+// link-local addresses it hands out are dropped, so it cannot make this node
+// probe its internal network (audit P2-M3). A peer that is itself on a private
+// network (a LAN or local test chain) may still share private addresses.
+func (d *DiscoveryService) addPeersToTable(nodeAddrStrs []string, fromPublicPeer bool) {
 	for _, nodeAddrStr := range nodeAddrStrs {
 		// Convert the string address info to a working type
 		nodeInfo, err := common.StringToAddrInfo(nodeAddrStr)
@@ -202,6 +209,10 @@ func (d *DiscoveryService) addPeersToTable(nodeAddrStrs []string) {
 			)
 
 			continue
+		}
+
+		if fromPublicPeer {
+			nodeInfo.Addrs = publicAddrs(nodeInfo.Addrs)
 		}
 
 		// Nothing to dial for an entry without an address (bare /p2p/<id>).
@@ -232,7 +243,7 @@ func (d *DiscoveryService) attemptToFindPeers(peerID peer.ID) error {
 	}
 
 	d.logger.Debug("Found new near peers", "peer", len(nodes))
-	d.addPeersToTable(nodes)
+	d.addPeersToTable(nodes, isPublicSource(d.baseServer.GetPeerInfo(peerID)))
 
 	return nil
 }
@@ -396,7 +407,7 @@ func (d *DiscoveryService) bootnodePeerDiscovery() {
 	}
 
 	// Save the peers for subsequent dialing
-	d.addPeersToTable(foundNodes)
+	d.addPeersToTable(foundNodes, isPublicSource(bootnode))
 }
 
 // FindPeers implements the proto service for finding the target's peers
@@ -453,4 +464,37 @@ func (d *DiscoveryService) FindPeers(
 	return &proto.FindPeersResp{
 		Nodes: filteredPeers,
 	}, nil
+}
+
+// isPublicSource reports whether a peer is reached on a public address.
+func isPublicSource(info *peer.AddrInfo) bool {
+	if info == nil {
+		return true // unknown: treat as the stricter case
+	}
+
+	return len(publicAddrs(info.Addrs)) > 0 || len(info.Addrs) == 0
+}
+
+// publicAddrs keeps the addresses that are publicly routable. Addresses with
+// no IP (DNS names) are kept: they resolve on dial like bootnode entries.
+func publicAddrs(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+	out := make([]multiaddr.Multiaddr, 0, len(addrs))
+
+	for _, a := range addrs {
+		ip, err := manet.ToIP(a)
+		if err != nil {
+			out = append(out, a)
+
+			continue
+		}
+
+		if ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() ||
+			ip.IsLinkLocalMulticast() || ip.IsMulticast() {
+			continue
+		}
+
+		out = append(out, a)
+	}
+
+	return out
 }

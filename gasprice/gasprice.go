@@ -102,14 +102,19 @@ func NewGasHelper(config *Config, backend Blockchain) (*GasHelper, error) {
 	rawIgnorePrice := new(big.Int).Set(config.IgnorePrice)
 	rawLastPrice := new(big.Int).Set(config.LastPrice)
 
-	// Enforce minimum gas price requirements
+	// Enforce minimum gas price requirements. Local copies: the caller's
+	// config is shared (tests pass one DefaultGasHelperConfig to many helpers
+	// in parallel) and must not be written to (audit T-L1).
 	minGasPrice := new(big.Int).SetUint64(chain.MinGasPrice)
-	if config.IgnorePrice.Cmp(minGasPrice) < 0 {
-		config.IgnorePrice = new(big.Int).Set(minGasPrice)
+
+	ignorePrice := new(big.Int).Set(config.IgnorePrice)
+	if ignorePrice.Cmp(minGasPrice) < 0 {
+		ignorePrice.Set(minGasPrice)
 	}
 
-	if config.LastPrice.Cmp(minGasPrice) < 0 {
-		config.LastPrice = new(big.Int).Set(minGasPrice)
+	lastPrice := new(big.Int).Set(config.LastPrice)
+	if lastPrice.Cmp(minGasPrice) < 0 {
+		lastPrice.Set(minGasPrice)
 	}
 
 	cache, err := lru.New(100)
@@ -121,8 +126,8 @@ func NewGasHelper(config *Config, backend Blockchain) (*GasHelper, error) {
 		numOfBlocksToCheck: config.NumOfBlocksToCheck,
 		pricePercentile:    pricePercentile,
 		sampleNumber:       config.SampleNumber,
-		ignorePrice:        config.IgnorePrice,
-		lastPrice:          config.LastPrice,
+		ignorePrice:        ignorePrice,
+		lastPrice:          lastPrice,
 		rawIgnorePrice:     rawIgnorePrice,
 		rawLastPrice:       rawLastPrice,
 		maxPrice:           config.MaxPrice,

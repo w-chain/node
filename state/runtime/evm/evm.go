@@ -40,7 +40,7 @@ func (e *EVM) Run(c *runtime.Contract, host runtime.Host, config *chain.ForksInT
 	contract.host = host
 	contract.config = config
 
-	contract.bitmap.setCode(c.Code)
+	loadJumpdests(&contract.bitmap, c, host)
 
 	ret, err := contract.Run()
 

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/w-chain-team/node/versioning"
@@ -197,7 +198,17 @@ const (
 
 	// wsWriteTimeout bounds a single write to a WS client.
 	wsWriteTimeout = 10 * time.Second
+
+	// maxWSRequestsInFlight bounds requests one WS connection may have
+	// running; past it the node stops reading that connection until one
+	// finishes. Each message used to get its own goroutine (audit P2-L1).
+	maxWSRequestsInFlight = 32
+
+	// maxWSConnections bounds open WS connections per node.
+	maxWSConnections = 2000
 )
+
+var openWSConnections atomic.Int64
 
 // errWSClientTooSlow wraps net.ErrClosed so the filter manager drops the
 // subscriptions of a client that stopped reading.
@@ -301,6 +312,14 @@ func isSupportedWSType(messageType int) bool {
 }
 
 func (j *JSONRPC) handleWs(w http.ResponseWriter, req *http.Request) {
+	if openWSConnections.Add(1) > maxWSConnections {
+		openWSConnections.Add(-1)
+		http.Error(w, "too many websocket connections", http.StatusServiceUnavailable)
+
+		return
+	}
+	defer openWSConnections.Add(-1)
+
 	// CORS rule - Allow requests from anywhere
 	wsUpgrader.CheckOrigin = func(r *http.Request) bool { return true }
 
@@ -319,6 +338,8 @@ func (j *JSONRPC) handleWs(w http.ResponseWriter, req *http.Request) {
 
 	wrapConn := newWSWrapper(ws, j.logger)
 	defer wrapConn.close()
+
+	inFlight := make(chan struct{}, maxWSRequestsInFlight)
 
 	j.logger.Info("Websocket connection established")
 	// Run the listen loop
@@ -344,7 +365,11 @@ func (j *JSONRPC) handleWs(w http.ResponseWriter, req *http.Request) {
 		}
 
 		if isSupportedWSType(msgType) {
+			inFlight <- struct{}{}
+
 			go func() {
+				defer func() { <-inFlight }()
+
 				defer func() {
 					if r := recover(); r != nil {
 						j.logger.Error("recovered from panic in WS handler", "err", r)

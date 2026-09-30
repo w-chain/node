@@ -124,6 +124,13 @@ func (c *CallTracer) CallStart(depth int, from, to types.Address, callType int,
 }
 
 func (c *CallTracer) CallEnd(depth int, output []byte, err error) {
+	// After Cancel, CallStart stops creating frames but CallEnd still fires
+	// for calls already running, which walked off the top of the tree and
+	// dereferenced nil (audit R-L2). A cancelled trace is discarded anyway.
+	if c.activeCall == nil {
+		return
+	}
+
 	c.activeCall.Output = hex.EncodeToHex(output)
 
 	gasUsed := uint64(0)

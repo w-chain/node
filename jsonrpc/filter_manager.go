@@ -18,6 +18,17 @@ import (
 	"github.com/hashicorp/go-hclog"
 )
 
+const (
+	// maxLogsPerQuery caps the logs one eth_getLogs call returns. A block of
+	// mainnet size holds far fewer; ranges beyond it must be split.
+	maxLogsPerQuery = 100_000
+
+	// maxConcurrentGetLogs bounds log queries running at once; others wait.
+	maxConcurrentGetLogs = 16
+)
+
+var getLogsSlots = make(chan struct{}, maxConcurrentGetLogs)
+
 var (
 	ErrFilterNotFound                   = errors.New("filter not found")
 	ErrWSFilterDoesNotSupportGetChanges = errors.New("web socket Filter doesn't support to return a batch of the changes")
@@ -25,6 +36,7 @@ var (
 	ErrBlockNotFound                    = errors.New("block not found")
 	ErrIncorrectBlockRange              = errors.New("incorrect range")
 	ErrBlockRangeTooHigh                = errors.New("block range too high")
+	ErrTooManyLogs                      = fmt.Errorf("query returned more than %d results, narrow the block range", maxLogsPerQuery)
 	ErrNoWSConnection                   = errors.New("no websocket connection")
 	ErrUnknownSubscriptionType          = errors.New("unknown subscription type")
 	ErrNilLogQuery                      = errors.New("filter object is required")
@@ -568,6 +580,10 @@ func (f *FilterManager) getLogsFromBlocks(query *LogQuery) ([]*Log, error) {
 		}
 
 		logs = append(logs, blockLogs...)
+
+		if len(logs) > maxLogsPerQuery {
+			return nil, ErrTooManyLogs
+		}
 	}
 
 	return logs, nil
@@ -575,6 +591,25 @@ func (f *FilterManager) getLogsFromBlocks(query *LogQuery) ([]*Log, error) {
 
 // GetLogsForQuery return array of logs for given query
 func (f *FilterManager) GetLogsForQuery(query *LogQuery) ([]*Log, error) {
+	// A log query reads every receipt in its range and holds the result in
+	// memory. With no limits one call could return hundreds of MB, and many
+	// in parallel exhaust the node (audit P2-M2).
+	getLogsSlots <- struct{}{}
+	defer func() { <-getLogsSlots }()
+
+	logs, err := f.getLogsForQuery(query)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(logs) > maxLogsPerQuery {
+		return nil, ErrTooManyLogs
+	}
+
+	return logs, nil
+}
+
+func (f *FilterManager) getLogsForQuery(query *LogQuery) ([]*Log, error) {
 	if query.BlockHash != nil {
 		// BlockHash is set -> fetch logs from this block only
 		block, ok := f.store.GetBlockByHash(*query.BlockHash, true)

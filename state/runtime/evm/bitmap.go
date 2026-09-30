@@ -6,6 +6,16 @@ const bitmapSize = 8
 
 type bitmap struct {
 	buf []byte
+
+	// shared marks buf as borrowed from the jumpdest cache: read-only, and
+	// dropped instead of zeroed on reset.
+	shared bool
+}
+
+// useShared points the bitmap at a cached analysis without copying it.
+func (b *bitmap) useShared(buf []byte) {
+	b.buf = buf
+	b.shared = true
 }
 
 func (b *bitmap) isSet(i uint64) bool {
@@ -17,6 +27,12 @@ func (b *bitmap) set(i uint64) {
 }
 
 func (b *bitmap) reset() {
+	if b.shared {
+		b.buf, b.shared = nil, false
+
+		return
+	}
+
 	for i := range b.buf {
 		b.buf[i] = 0
 	}
@@ -25,6 +41,10 @@ func (b *bitmap) reset() {
 }
 
 func (b *bitmap) setCode(code []byte) {
+	if b.shared {
+		b.buf, b.shared = nil, false
+	}
+
 	codeSize := len(code)
 	b.buf = common.ExtendByteSlice(b.buf, codeSize/bitmapSize+1)
 

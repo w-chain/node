@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/go-hclog"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"google.golang.org/grpc"
+	protobuf "google.golang.org/protobuf/proto"
 
 	"github.com/w-chain-team/node/blockchain"
 	"github.com/w-chain-team/node/chain"
@@ -231,6 +232,12 @@ func NewTxPool(
 		// subscribe to the gossip protocol
 		topic, err := network.NewTopic(topicNameV1, &proto.Txn{})
 		if err != nil {
+			return nil, err
+		}
+
+		// Drop oversized or malformed transactions before they are relayed
+		// to peers, not only before they are added here (audit S-L1).
+		if err := network.RegisterTopicValidator(topicNameV1, isRelayableGossipTx); err != nil {
 			return nil, err
 		}
 
@@ -819,9 +826,8 @@ func (p *TxPool) addTx(origin txOrigin, tx *types.Transaction) error {
 			metrics.IncrCounter([]string{txPoolMetrics, "already_known_tx"}, 1)
 
 			return ErrAlreadyKnown
-		} else if oldTxWithSameNonce.GetGasPrice(p.baseFee).Cmp(
-			tx.GetGasPrice(p.baseFee)) >= 0 {
-			// if tx with same nonce does exist and has same or better gas price -> return error
+		} else if !isReplacementPriceBumped(oldTxWithSameNonce.GetGasPrice(p.baseFee), tx.GetGasPrice(p.baseFee)) {
+			// the replacement must pay at least replacementPriceBump% more
 			metrics.IncrCounter([]string{txPoolMetrics, "underpriced_tx"}, 1)
 
 			return ErrReplacementUnderpriced
@@ -1094,4 +1100,32 @@ func toHash(txs ...*types.Transaction) (hashes []types.Hash) {
 	}
 
 	return
+}
+
+// replacementPriceBump is the minimum price increase, in percent, for a
+// transaction to replace a pending one with the same nonce — the same rule as
+// geth. Any increase used to be enough, so one account could re-broadcast a
+// transaction endlessly for +1 wei each time (audit S-L1).
+const replacementPriceBump = 10
+
+func isReplacementPriceBumped(oldPrice, newPrice *big.Int) bool {
+	// newPrice * 100 >= oldPrice * (100 + bump)
+	lhs := new(big.Int).Mul(newPrice, big.NewInt(100))
+	rhs := new(big.Int).Mul(oldPrice, big.NewInt(100+replacementPriceBump))
+
+	return lhs.Cmp(rhs) >= 0 && newPrice.Cmp(oldPrice) > 0
+}
+
+// isRelayableGossipTx is the gossip validator for the transaction topic.
+func isRelayableGossipTx(data []byte) bool {
+	raw := &proto.Txn{}
+	if err := protobuf.Unmarshal(data, raw); err != nil {
+		return false
+	}
+
+	if raw.Raw == nil {
+		return false
+	}
+
+	return types.CheckRawTx(raw.Raw.Value) == nil
 }

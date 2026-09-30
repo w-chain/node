@@ -3,17 +3,18 @@ package discovery
 import (
 	"context"
 	"errors"
+	"github.com/multiformats/go-multiaddr"
 	"testing"
 	"time"
 
-	"github.com/w-chain-team/node/helper/tests"
-	"github.com/w-chain-team/node/network/common"
-	"github.com/w-chain-team/node/network/proto"
-	networkTesting "github.com/w-chain-team/node/network/testing"
 	"github.com/hashicorp/go-hclog"
 	kb "github.com/libp2p/go-libp2p-kbucket"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/stretchr/testify/assert"
+	"github.com/w-chain-team/node/helper/tests"
+	"github.com/w-chain-team/node/network/common"
+	"github.com/w-chain-team/node/network/proto"
+	networkTesting "github.com/w-chain-team/node/network/testing"
 	"google.golang.org/grpc"
 )
 
@@ -73,8 +74,10 @@ func getRandomPeers(t *testing.T, count int) []*peer.AddrInfo {
 // discovery service's peer discovery mechanism through the bootnode works as
 // expected
 func TestDiscoveryService_BootnodePeerDiscovery(t *testing.T) {
+	// A bootnode on the local machine may share local addresses (P2-M3).
 	randomBootnode := &peer.AddrInfo{
-		ID: "RandomBootnode",
+		ID:    "RandomBootnode",
+		Addrs: []multiaddr.Multiaddr{multiaddr.StringCast("/ip4/127.0.0.1/tcp/1478")},
 	}
 	randomPeers := getRandomPeers(t, 3)
 	expectedDisconnectReason := "Thank you"

@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"time"
 
@@ -400,13 +401,28 @@ func (e *Eth) getGasPrice() (uint64, error) {
 			return 0, err
 		}
 
-		return common.Max(e.priceLimit, priorityFee.Uint64()+e.store.GetBaseFee()), nil
+		return common.Max(e.priceLimit, suggestedGasPrice(priorityFee, e.store.GetBaseFee())), nil
 	}
 
 	// Fetch average gas price in uint64
 	avgGasPrice := e.store.GetAvgGasPrice().Uint64()
 
 	return common.Max(e.priceLimit, avgGasPrice), nil
+}
+
+// suggestedGasPrice is tip + base fee, saturating at MaxUint64 instead of
+// wrapping around to a tiny price (audit E-L2).
+func suggestedGasPrice(tip *big.Int, baseFee uint64) uint64 {
+	if !tip.IsUint64() {
+		return math.MaxUint64
+	}
+
+	sum := tip.Uint64() + baseFee
+	if sum < baseFee {
+		return math.MaxUint64
+	}
+
+	return sum
 }
 
 // fillTransactionGasPrice fills transaction gas price if no provided
@@ -466,8 +482,18 @@ func (o *overrideAccount) ToType() types.OverrideAccount {
 // StateOverride is the collection of overridden accounts.
 type stateOverride map[types.Address]overrideAccount
 
+// maxConcurrentEVMCalls bounds eth_call and eth_estimateGas running at once.
+// Each is already capped in gas and time; without this, a burst of them still
+// meant unbounded goroutines all burning CPU (audit R-L1). Extra calls wait.
+const maxConcurrentEVMCalls = 64
+
+var evmCallSlots = make(chan struct{}, maxConcurrentEVMCalls)
+
 // Call executes a smart contract call using the transaction object data
 func (e *Eth) Call(arg *txnArgs, filter BlockNumberOrHash, apiOverride *stateOverride) (interface{}, error) {
+	evmCallSlots <- struct{}{}
+	defer func() { <-evmCallSlots }()
+
 	header, err := GetHeaderFromBlockNumberOrHash(filter, e.store)
 	if err != nil {
 		return nil, err
@@ -527,6 +553,9 @@ func (e *Eth) Call(arg *txnArgs, filter BlockNumberOrHash, apiOverride *stateOve
 
 // EstimateGas estimates the gas needed to execute a transaction
 func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error) {
+	evmCallSlots <- struct{}{}
+	defer func() { <-evmCallSlots }()
+
 	number := LatestBlockNumber
 	if rawNum != nil {
 		number = *rawNum

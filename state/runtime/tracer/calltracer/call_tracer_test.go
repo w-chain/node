@@ -342,3 +342,22 @@ func TestCallTracer_CallEnd(t *testing.T) {
 		require.Equal(t, uint64(500), tracer.activeCall.startGas)
 	})
 }
+
+// R-L2: calls still unwinding after Cancel must not dereference a nil frame.
+func TestCallTracer_CallEndAfterCancel(t *testing.T) {
+	t.Parallel()
+
+	c := &CallTracer{}
+	c.CallStart(1, types.ZeroAddress, types.ZeroAddress, 0, 100, nil, nil)
+	c.Cancel(errors.New("timeout"))
+	c.CallStart(2, types.ZeroAddress, types.ZeroAddress, 0, 50, nil, nil) // skipped: cancelled
+
+	require.NotPanics(t, func() {
+		c.CallEnd(2, nil, nil) // for the skipped frame: pops to the root
+		c.CallEnd(1, nil, nil)
+		c.CallEnd(1, nil, nil) // one more than there are frames
+	})
+
+	c.activeCall = nil
+	require.NotPanics(t, func() { c.CallEnd(1, nil, nil) })
+}
