@@ -50,6 +50,7 @@ var (
 	ErrExtractSignature        = errors.New("cannot extract signature")
 	ErrInvalidSender           = errors.New("invalid sender")
 	ErrTxPoolOverflow          = errors.New("txpool is full")
+	ErrAccountPoolShareFull    = errors.New("txpool is nearly full and this account already holds its share")
 	ErrUnderpriced             = errors.New("transaction underpriced")
 	ErrNonceTooLow             = errors.New("nonce too low")
 	ErrInsufficientFunds       = errors.New("insufficient funds for gas * price + value")
@@ -845,6 +846,10 @@ func (p *TxPool) addTx(origin txOrigin, tx *types.Transaction) error {
 		}
 	}
 
+	if err := p.checkAccountPending(account, tx, oldTxWithSameNonce); err != nil {
+		return err
+	}
+
 	slotsAllocated := slotsRequired(tx)
 
 	var slotsFreed uint64
@@ -1128,4 +1133,58 @@ func isRelayableGossipTx(data []byte) bool {
 	}
 
 	return types.CheckRawTx(raw.Raw.Value) == nil
+}
+
+// maxAccountShareDivisor sets the most of the pool one account may hold while
+// the pool is under pressure: 1/8 of all slots.
+const maxAccountShareDivisor = 8
+
+// checkAccountPending applies the limits that depend on everything the account
+// already has in the pool (audit S-M2). The caller holds the account's locks.
+//
+//   - The account's balance must cover all its pending transactions together,
+//     not each one alone. Before, a small balance could back thousands of
+//     transactions that each claim the whole block gas limit: only one fits
+//     per block, so they jammed the pool for hours at almost no cost.
+//   - While the pool is nearly full, one account may not grow past its share,
+//     so a single sender cannot crowd everyone else out. Normal use, including
+//     large batches, is unaffected while there is room.
+func (p *TxPool) checkAccountPending(account *account, tx, replaced *types.Transaction) error {
+	pendingCost := new(big.Int)
+
+	var pendingSlots uint64
+
+	for _, pending := range account.nonceToTx.mapping {
+		if replaced != nil && pending.Nonce == replaced.Nonce {
+			continue
+		}
+
+		pendingCost.Add(pendingCost, pending.Cost())
+		pendingSlots += slotsRequired(pending)
+	}
+
+	if replaced == nil && p.gauge.highPressure() &&
+		pendingSlots+slotsRequired(tx) > p.gauge.max/maxAccountShareDivisor {
+		metrics.IncrCounter([]string{txPoolMetrics, "account_share_full_tx"}, 1)
+
+		return ErrAccountPoolShareFull
+	}
+
+	if pendingCost.Sign() == 0 {
+		return nil // alone in the pool: validateTx already checked its cost
+	}
+
+	balance, err := p.store.GetBalance(p.store.Header().StateRoot, tx.From)
+	if err != nil {
+		return ErrInvalidAccountState
+	}
+
+	if balance.Cmp(pendingCost.Add(pendingCost, tx.Cost())) < 0 {
+		metrics.IncrCounter([]string{txPoolMetrics, "insufficient_funds_tx"}, 1)
+
+		return fmt.Errorf("%w: balance does not cover this and the account's other pending transactions",
+			ErrInsufficientFunds)
+	}
+
+	return nil
 }
