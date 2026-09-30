@@ -77,23 +77,21 @@ func (i *backendIBFT) setupTransport() error {
 				return
 			}
 
-			// Observe BEFORE the validator check: this is precisely the
-			// message a non-validator would otherwise discard, and it is the
-			// only place double-signing is visible.
-			if i.observer != nil {
-				i.observer(msg, from)
-			}
-
-			if !i.isActiveValidator() {
-				return
-			}
-
 			head := i.blockchain.Header().Number
 
 			if !isWithinMessageWindow(msg.View, head) {
 				i.logger.Debug("dropping consensus message outside height/round window",
 					"height", msg.View.Height, "round", msg.View.Round)
 
+				return
+			}
+
+			// Observe BEFORE the active-validator check: this is precisely the
+			// message a non-validator would otherwise discard, and it is the
+			// only place double-signing is visible.
+			i.observe(msg, from)
+
+			if !i.isActiveValidator() {
 				return
 			}
 
@@ -131,4 +129,15 @@ func isWellFormedIBFTMessage(data []byte) bool {
 	}
 
 	return validateIBFTMessage(msg) == nil
+}
+
+// observe hands msg to the watcher's observer, if any. Only messages really
+// signed by a validator of that height are recorded: anyone can gossip a
+// structurally valid message with a made-up sender, and those used to be
+// written to disk unchecked — filling it, and looking like evidence to a
+// reader that trusts the file (audit W-M1).
+func (i *backendIBFT) observe(msg *proto.Message, from peer.ID) {
+	if i.observer != nil && i.IsValidValidator(msg) {
+		i.observer(msg, from)
+	}
 }
