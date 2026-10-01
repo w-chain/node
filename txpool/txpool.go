@@ -396,6 +396,10 @@ func (p *TxPool) Pop(tx *types.Transaction) {
 	// update the account nonce -> *tx map
 	account.nonceToTx.remove(head)
 
+	// It left the pool: drop it from the hash index too, or a tx whose block
+	// was never committed stayed "known" and "pending" forever (audit TP-L2).
+	p.index.remove(head)
+
 	// successfully popping an account resets its demotions count to 0
 	account.resetDemotions()
 
@@ -839,14 +843,20 @@ func (p *TxPool) addTx(origin txOrigin, tx *types.Transaction) error {
 			metrics.IncrCounter([]string{txPoolMetrics, "already_known_tx"}, 1)
 
 			return ErrAlreadyKnown
-		} else if !isReplacementPriceBumped(oldTxWithSameNonce.GetGasPrice(p.baseFee), tx.GetGasPrice(p.baseFee)) {
+		} else if baseFee := p.GetBaseFee(); !isReplacementPriceBumped(
+			oldTxWithSameNonce.GetGasPrice(baseFee), tx.GetGasPrice(baseFee)) {
+			// baseFee is read atomically: SetBaseFee writes it on every block
+			// while gossip adds txs concurrently (audit TX-L1).
 			// the replacement must pay at least replacementPriceBump% more
 			metrics.IncrCounter([]string{txPoolMetrics, "underpriced_tx"}, 1)
 
 			return ErrReplacementUnderpriced
 		}
 	} else {
-		if account.enqueued.length() == account.maxEnqueued && tx.Nonce != accountNonce {
+		// >= not ==: a tx can be enqueued before its async promotion runs,
+		// pushing the queue past the limit, after which == never matched
+		// again and one account queued without limit (audit TP-L1).
+		if account.enqueued.length() >= account.maxEnqueued && tx.Nonce != accountNonce {
 			return ErrMaxEnqueuedLimitReached
 		}
 

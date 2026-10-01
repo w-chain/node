@@ -117,8 +117,11 @@ func (m *accountsMap) allTxs(includeEnqueued bool) (
 		account.promoted.lock(false)
 		defer account.promoted.unlock()
 
+		// Copy under the lock: the caller reads the result after it is
+		// released, while promotion and Pop keep changing the queue
+		// (audit TP-L3).
 		if account.promoted.length() != 0 {
-			allPromoted[addr] = account.promoted.queue
+			allPromoted[addr] = append([]*types.Transaction(nil), account.promoted.queue...)
 		}
 
 		if includeEnqueued {
@@ -126,7 +129,7 @@ func (m *accountsMap) allTxs(includeEnqueued bool) (
 			defer account.enqueued.unlock()
 
 			if account.enqueued.length() != 0 {
-				allEnqueued[addr] = account.enqueued.queue
+				allEnqueued[addr] = append([]*types.Transaction(nil), account.enqueued.queue...)
 			}
 		}
 

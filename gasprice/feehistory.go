@@ -143,12 +143,20 @@ func (g *GasHelper) FeeHistory(blockCount uint64, newestBlock uint64, rewardPerc
 		sorter := make([]*txGasAndReward, len(block.Transactions))
 		baseFee := new(big.Int).SetUint64(block.Header.BaseFee)
 
+		// Weigh each tx by its gas, in gas units. It used to be gas*price
+		// (wei) compared against a threshold in gas, so the very first tx
+		// already passed every percentile and all rewards came out as the
+		// lowest tip (audit RPC-L1). Receipts are not at hand here, so a tx's
+		// gas limit stands in for its gas used, and percentiles are taken of
+		// the block's total gas limit of txs (exact for plain transfers).
+		totalTxGas := uint64(0)
+
 		for j, tx := range block.Transactions {
-			cost := tx.Cost()
 			sorter[j] = &txGasAndReward{
-				gasUsed: cost.Sub(cost, tx.Value),
+				gasUsed: new(big.Int).SetUint64(tx.Gas),
 				reward:  tx.EffectiveGasTip(baseFee),
 			}
+			totalTxGas += tx.Gas
 		}
 
 		sort.Slice(sorter, func(i, j int) bool {
@@ -161,7 +169,7 @@ func (g *GasHelper) FeeHistory(blockCount uint64, newestBlock uint64, rewardPerc
 
 		// calculate reward for each percentile
 		for c, v := range rewardPercentiles {
-			thresholdGasUsed := uint64(float64(block.Header.GasUsed) * v / 100)
+			thresholdGasUsed := uint64(float64(totalTxGas) * v / 100)
 			for sumGasUsed < thresholdGasUsed && txIndex < len(block.Transactions)-1 {
 				txIndex++
 				sumGasUsed += sorter[txIndex].gasUsed.Uint64()

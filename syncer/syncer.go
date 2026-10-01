@@ -20,9 +20,13 @@ const (
 
 const (
 	// syncRateWindow and minBlocksPerSyncWindow set the slowest stream a
-	// peer may keep open during bulk sync.
+	// peer may keep open during bulk sync: one block per second of waiting,
+	// twice the chain's own rate (2s blocks). At 10 per window (0.33 blocks/s)
+	// a peer could drip blocks slower than the chain grows and keep a lagging
+	// node falling further behind forever (audit SYN-M1). Only time spent
+	// waiting on the peer counts, so honest bulk streams pass easily.
 	syncRateWindow         = 30 * time.Second
-	minBlocksPerSyncWindow = 10
+	minBlocksPerSyncWindow = 30
 )
 
 var (

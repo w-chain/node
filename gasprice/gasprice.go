@@ -241,6 +241,14 @@ func (g *GasHelper) MaxPriorityFeePerGas() (*big.Int, error) {
 		if err := collectPrices(currentBlock); err != nil {
 			return nil, err
 		}
+
+		// Move on to the parent. It used to re-sample the same block until
+		// enough prices were collected, so one high-tip tx could pin the
+		// suggested tip at the cap for ~30 heads (audit RPC-L2).
+		currentBlock, found = g.backend.GetBlockByHash(currentBlock.ParentHash(), true)
+		if !found {
+			return nil, fmt.Errorf(couldNotFoundBlockFormat, currentHeader.Number, currentHeader.Hash)
+		}
 	}
 
 	price := lastPrice

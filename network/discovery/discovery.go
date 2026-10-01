@@ -275,6 +275,13 @@ func (d *DiscoveryService) findPeersCall(
 		}
 	}
 
+	// We asked for maxDiscoveryPeerReqCount; a peer could answer with tens of
+	// thousands of entries (~4 MB) every round, each one parsed and dialled
+	// (audit G-L1).
+	if len(resp.Nodes) > maxDiscoveryPeerReqCount {
+		return resp.Nodes[:maxDiscoveryPeerReqCount], nil
+	}
+
 	return resp.Nodes, nil
 }
 

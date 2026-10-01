@@ -853,8 +853,29 @@ func (j *jsonRPCHub) GetSyncProgression() *progress.Progression {
 
 // SETUP //
 
+// noBridgeProvider answers bridge_* calls on consensus engines without a
+// bridge (IBFT). The hub used to embed a nil provider there, so every
+// bridge_* call panicked: recovered, but a stack trace per call in the logs
+// and any batch containing one failed (audit RPC-L3).
+type noBridgeProvider struct{}
+
+var errBridgeNotSupported = errors.New("bridge is not supported by this consensus engine")
+
+func (noBridgeProvider) GenerateExitProof(uint64) (types.Proof, error) {
+	return types.Proof{}, errBridgeNotSupported
+}
+
+func (noBridgeProvider) GetStateSyncProof(uint64) (types.Proof, error) {
+	return types.Proof{}, errBridgeNotSupported
+}
+
 // setupJSONRCP sets up the JSONRPC server, using the set configuration
 func (s *Server) setupJSONRPC() error {
+	var bridge consensus.BridgeDataProvider = noBridgeProvider{}
+	if p := s.consensus.GetBridgeProvider(); p != nil {
+		bridge = p
+	}
+
 	hub := &jsonRPCHub{
 		state:              s.state,
 		restoreProgression: s.restoreProgression,
@@ -863,7 +884,7 @@ func (s *Server) setupJSONRPC() error {
 		Executor:           s.executor,
 		Consensus:          s.consensus,
 		Server:             s.network,
-		BridgeDataProvider: s.consensus.GetBridgeProvider(),
+		BridgeDataProvider: bridge,
 		GasStore:           s.gasHelper,
 	}
 

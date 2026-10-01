@@ -580,9 +580,12 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 
 	forksInTime := e.store.GetForksInTime(header.Number)
 
-	if transaction.IsValueTransfer() {
-		// if it is a simple value transfer or a contract creation,
-		// we already know what is the transaction gas cost, no need to apply transaction
+	// A plain value transfer to an account without code costs exactly the
+	// intrinsic gas. To a contract it runs code (receive/fallback), so it must
+	// be executed like any call: returning 21000 there made wallets send
+	// transfers to Safes / WETH-style contracts that ran out of gas and lost
+	// the fee (audit RPC-M3).
+	if transaction.IsValueTransfer() && !e.hasCode(header.StateRoot, *transaction.To) {
 		gasCost, err := state.TransactionGasCost(transaction, forksInTime.Homestead, forksInTime.Istanbul)
 		if err != nil {
 			return nil, err
@@ -852,6 +855,13 @@ func (e *Eth) GetTransactionCount(address types.Address, filter BlockNumberOrHas
 }
 
 // GetCode returns account code at given block number
+// hasCode reports whether addr holds contract code at the given state root.
+func (e *Eth) hasCode(root types.Hash, addr types.Address) bool {
+	code, err := e.store.GetCode(root, addr)
+
+	return err == nil && len(code) > 0
+}
+
 func (e *Eth) GetCode(address types.Address, filter BlockNumberOrHash) (interface{}, error) {
 	header, err := GetHeaderFromBlockNumberOrHash(filter, e.store)
 	if err != nil {

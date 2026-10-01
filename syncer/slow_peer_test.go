@@ -104,3 +104,20 @@ func TestBulkSync_KeepsFastPeerWhenLocalWriteIsSlow(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, *synced, 30)
 }
+
+// SYN-M1: the minimum rate used to be 10 blocks per 30 s window (0.33 blocks/s),
+// slower than the chain's own 0.5 blocks/s, so a peer dripping just above it
+// was never dropped and the node fell further behind forever. Scaled: window
+// 300 ms, one block every 29 ms (prod-equivalent one per 2.9 s).
+func TestBulkSync_DropsPeerSlowerThanTheChain(t *testing.T) {
+	t.Parallel()
+
+	blocks := createMockBlocks(120)
+
+	s, _ := newRateTestSyncer(func() <-chan *types.Block {
+		return blocksToCh(blocks, 29*time.Millisecond)
+	}, 300*time.Millisecond)
+
+	_, _, err := s.bulkSyncWithPeer(peer.ID("drip"), 1_000_000, func(*types.FullBlock) bool { return false })
+	require.ErrorIs(t, err, errSlowSyncPeer)
+}
