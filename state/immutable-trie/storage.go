@@ -2,13 +2,14 @@ package itrie
 
 import (
 	"fmt"
+	lru "github.com/hashicorp/golang-lru"
 	"sync"
 
-	"github.com/w-chain-team/node/helper/hex"
-	"github.com/w-chain-team/node/types"
 	"github.com/hashicorp/go-hclog"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/umbracle/fastrlp"
+	"github.com/w-chain-team/node/helper/hex"
+	"github.com/w-chain-team/node/types"
 )
 
 var parserPool fastrlp.ParserPool
@@ -180,7 +181,34 @@ func (m *memBatch) Write() error {
 }
 
 // GetNode retrieves a node from storage
+// decodedNodeCacheSize bounds the decoded-node cache: it keeps the upper
+// levels of the state trie and recent paths warm, at ~75 MB at most whatever
+// the state size (reads stay ~0.8 µs per account when warm).
+const decodedNodeCacheSize = 128 * 1024
+
+// decodedNodes caches decoded trie nodes by hash. A node's hash fixes its
+// content, so a cached node is always the right one for that hash, whichever
+// storage asked. Lookups used to write resolved nodes back into the shared
+// trie instead, racing with concurrent readers and never releasing them
+// (audit ST-M2); this cache is safe for concurrent use and bounded.
+var decodedNodes, _ = lru.New(decodedNodeCacheSize)
+
 func GetNode(root []byte, storage Storage) (Node, bool, error) {
+	if cached, ok := decodedNodes.Get(string(root)); ok {
+		if n, ok := cached.(Node); ok {
+			return n, true, nil
+		}
+	}
+
+	n, ok, err := getNode(root, storage)
+	if ok && err == nil {
+		decodedNodes.Add(string(root), n)
+	}
+
+	return n, ok, err
+}
+
+func getNode(root []byte, storage Storage) (Node, bool, error) {
 	data, ok, err := storage.Get(root)
 	if err != nil || !ok || len(data) == 0 {
 		return nil, false, err

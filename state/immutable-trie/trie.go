@@ -193,11 +193,11 @@ func (t *Txn) lookup(node interface{}, key []byte) (Node, []byte) {
 			return nil, nil
 		}
 
-		child, res := t.lookup(n.child, key[plen:])
-
-		if child != nil {
-			n.child = child
-		}
+		// Never write the resolved child back into n: this trie is shared
+		// through the state cache by block import, RPC and the txpool, so
+		// that write raced with their reads (audit ST-M2). Resolved nodes
+		// are cached by hash in GetNode instead.
+		_, res := t.lookup(n.child, key[plen:])
 
 		return nil, res
 
@@ -206,11 +206,7 @@ func (t *Txn) lookup(node interface{}, key []byte) (Node, []byte) {
 			return t.lookup(n.value, key)
 		}
 
-		child, res := t.lookup(n.getEdge(key[0]), key[1:])
-
-		if child != nil {
-			n.children[key[0]] = child
-		}
+		_, res := t.lookup(n.getEdge(key[0]), key[1:])
 
 		return nil, res
 

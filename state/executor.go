@@ -433,6 +433,7 @@ func (t *Transition) Txn() *Txn {
 // Apply applies a new transaction
 func (t *Transition) Apply(msg *types.Transaction) (*runtime.ExecutionResult, error) {
 	s := t.state.Snapshot()
+	defer t.state.ReleaseSnapshot(s)
 
 	result, err := t.apply(msg)
 	if err != nil {
@@ -753,6 +754,8 @@ func (t *Transition) applyCall(
 	}
 
 	snapshot := t.state.Snapshot()
+	defer t.state.ReleaseSnapshot(snapshot)
+
 	t.state.TouchAccount(c.Address)
 
 	if callType == runtime.Call {
@@ -819,6 +822,7 @@ func (t *Transition) applyCreate(c *runtime.Contract, host runtime.Host) *runtim
 
 	// Take snapshot of the current state
 	snapshot := t.state.Snapshot()
+	defer t.state.ReleaseSnapshot(snapshot)
 
 	if t.config.EIP158 {
 		// Force the creation of the account

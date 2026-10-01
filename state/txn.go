@@ -36,6 +36,20 @@ type Txn struct {
 	snapshots []*iradix.Tree
 	txn       *iradix.Txn
 	codeCache *lru.Cache
+
+	// dirty holds the accounts written since the last CleanDeleteObjects.
+	// Only they can have become empty or self-destructed, so cleaning checks
+	// them instead of walking every account touched so far in the block,
+	// which made a block quadratic in touched accounts (audit ST-H1).
+	dirty map[string]struct{}
+}
+
+func (txn *Txn) markDirty(key []byte) {
+	if txn.dirty == nil {
+		txn.dirty = make(map[string]struct{})
+	}
+
+	txn.dirty[string(key)] = struct{}{}
 }
 
 func NewTxn(snapshot Snapshot) *Txn {
@@ -67,6 +81,24 @@ func (txn *Txn) Snapshot() int {
 	txn.snapshots = append(txn.snapshots, t)
 
 	return id
+}
+
+// ReleaseSnapshot drops snapshot id and every later one. Snapshots belong to a
+// call frame and are only reverted to inside it, and frames finish in reverse
+// order, so once a frame returns its snapshot and its inner frames' are never
+// used again. Keeping them until the end of the block pinned an old copy of
+// the state tree per call: a transaction of many calls held hundreds of MB
+// (audit ST-M1).
+func (txn *Txn) ReleaseSnapshot(id int) {
+	if id < 0 || id >= len(txn.snapshots) {
+		return
+	}
+
+	for i := id; i < len(txn.snapshots); i++ {
+		txn.snapshots[i] = nil // let the old tree be collected
+	}
+
+	txn.snapshots = txn.snapshots[:id]
 }
 
 // RevertToSnapshot reverts to a given snapshot
@@ -136,6 +168,7 @@ func (txn *Txn) upsertAccount(addr types.Address, create bool, f func(object *St
 
 	if object != nil {
 		txn.txn.Insert(addr.Bytes(), object)
+		txn.markDirty(addr.Bytes())
 	}
 }
 
@@ -545,32 +578,30 @@ func (txn *Txn) CreateAccount(addr types.Address) {
 	}
 
 	txn.txn.Insert(addr.Bytes(), obj)
+	txn.markDirty(addr.Bytes())
 }
 
 func (txn *Txn) CleanDeleteObjects(deleteEmptyObjects bool) error {
-	remove := [][]byte{}
+	dirty := txn.dirty
+	txn.dirty = nil
 
-	txn.txn.Root().Walk(func(k []byte, v interface{}) bool {
-		a, ok := v.(*StateObject)
-		if !ok {
-			return false
-		}
-		if a.Suicide || a.Empty() && deleteEmptyObjects {
-			remove = append(remove, k)
-		}
+	for key := range dirty {
+		k := []byte(key)
 
-		return false
-	})
-
-	for _, k := range remove {
+		// A write undone by a reverted call is simply gone.
 		v, ok := txn.txn.Get(k)
 		if !ok {
-			return fmt.Errorf("failed to retrieve value for %s key", string(k))
+			continue
 		}
 
 		obj, ok := v.(*StateObject)
 		if !ok {
 			return errors.New("found object is not of StateObject type")
+		}
+
+		// Marking an already deleted object again changes nothing.
+		if obj.Deleted || !(obj.Suicide || obj.Empty() && deleteEmptyObjects) {
+			continue
 		}
 
 		obj2 := obj.Copy()
