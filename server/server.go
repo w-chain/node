@@ -139,10 +139,15 @@ func NewServer(config *Config) (*Server, error) {
 	}
 
 	m := &Server{
-		logger:             logger.Named("server"),
-		config:             config,
-		chain:              config.Chain,
-		grpcServer:         grpc.NewServer(grpc.UnaryInterceptor(unaryInterceptor)),
+		logger: logger.Named("server"),
+		config: config,
+		chain:  config.Chain,
+		grpcServer: grpc.NewServer(
+			grpc.UnaryInterceptor(unaryInterceptor),
+			// The operator API has no authentication; bound how many
+			// streams one caller can keep open at once (audit G-M1).
+			grpc.MaxConcurrentStreams(operatorMaxConcurrentStreams),
+		),
 		restoreProgression: progress.NewProgressionWrapper(progress.ChainSyncRestore),
 	}
 
@@ -852,6 +857,10 @@ func (j *jsonRPCHub) GetSyncProgression() *progress.Progression {
 }
 
 // SETUP //
+
+// operatorMaxConcurrentStreams caps concurrent streams per connection on the
+// operator gRPC server.
+const operatorMaxConcurrentStreams = 64
 
 // noBridgeProvider answers bridge_* calls on consensus engines without a
 // bridge (IBFT). The hub used to embed a nil provider there, so every

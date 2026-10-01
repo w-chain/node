@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -25,6 +26,9 @@ import (
 )
 
 const (
+	// sweepEveryBlocks is how often sweepEmptyAccounts runs (~2 min at 2s).
+	sweepEveryBlocks = 64
+
 	txSlotSize  = 32 * 1024  // 32kB
 	txMaxSize   = 128 * 1024 // 128Kb
 	topicNameV1 = "txpool/0.1"
@@ -35,6 +39,13 @@ const (
 
 	// maximum allowed number of consecutive blocks that don't have the account's transaction
 	maxAccountSkips = uint64(10)
+
+	// maxValidatorAccountSkips is the same limit on validators: an account
+	// none of whose txs made it into 1800 blocks in a row (~1 hour) is
+	// dropped. Validators had no limit at all, so txs that can never be
+	// included held their slots forever (audit TP-M1). It is far longer
+	// than on other nodes because validators are the ones building blocks.
+	maxValidatorAccountSkips = uint64(1800)
 
 	pruningCooldown = 5000 * time.Millisecond
 
@@ -50,7 +61,7 @@ var (
 	ErrExtractSignature        = errors.New("cannot extract signature")
 	ErrInvalidSender           = errors.New("invalid sender")
 	ErrTxPoolOverflow          = errors.New("txpool is full")
-	ErrAccountPoolShareFull    = errors.New("txpool is nearly full and this account already holds its share")
+	ErrAccountPoolShareFull    = errors.New("this account already holds its share of the txpool")
 	ErrUnderpriced             = errors.New("transaction underpriced")
 	ErrNonceTooLow             = errors.New("nonce too low")
 	ErrInsufficientFunds       = errors.New("insufficient funds for gas * price + value")
@@ -154,6 +165,18 @@ type TxPool struct {
 	// map of all accounts registered by the pool
 	accounts accountsMap
 
+	// accountsLock lets sweepEmptyAccounts remove accounts while no tx is
+	// being added: addTx holds it shared from looking an account up until
+	// the tx is queued on it, the sweep holds it exclusively.
+	accountsLock sync.RWMutex
+
+	// sweepCounter paces sweepEmptyAccounts (every sweepEveryBlocks blocks).
+	sweepCounter atomic.Uint64
+
+	// signerReady is set once SetSigner has run; the gossip validator may be
+	// called before that and must not read the signer until then.
+	signerReady atomic.Bool
+
 	// all the primaries sorted by max gas price
 	executables *pricedQueue
 
@@ -236,9 +259,10 @@ func NewTxPool(
 			return nil, err
 		}
 
-		// Drop oversized or malformed transactions before they are relayed
-		// to peers, not only before they are added here (audit S-L1).
-		if err := network.RegisterTopicValidator(topicNameV1, isRelayableGossipTx); err != nil {
+		// Drop transactions that fail the pool's own checks before they are
+		// relayed to peers, not only before they are added here (audit
+		// S-L1, TP-M2).
+		if err := network.RegisterTopicValidator(topicNameV1, pool.isRelayableGossipTx); err != nil {
 			return nil, err
 		}
 
@@ -307,6 +331,7 @@ func (p *TxPool) Close() {
 // to validate a transaction's signature.
 func (p *TxPool) SetSigner(s signer) {
 	p.signer = s
+	p.signerReady.Store(true)
 }
 
 // SetSealing sets the sealing flag
@@ -369,6 +394,9 @@ func (p *TxPool) Peek() *types.Transaction {
 func (p *TxPool) Pop(tx *types.Transaction) {
 	// fetch the associated account
 	account := p.accounts.get(tx.From)
+	if account == nil {
+		return // already emptied and swept
+	}
 
 	account.promoted.lock(true)
 	account.nonceToTx.lock()
@@ -419,6 +447,10 @@ func (p *TxPool) Pop(tx *types.Transaction) {
 // and reverts its next (expected) nonce.
 func (p *TxPool) Drop(tx *types.Transaction) {
 	account := p.accounts.get(tx.From)
+	if account == nil {
+		return // already emptied and swept
+	}
+
 	p.dropAccount(account, tx.Nonce, tx)
 }
 
@@ -481,6 +513,10 @@ func (p *TxPool) dropAccount(account *account, nextNonce uint64, tx *types.Trans
 // it is Dropped instead.
 func (p *TxPool) Demote(tx *types.Transaction) {
 	account := p.accounts.get(tx.From)
+	if account == nil {
+		return // already emptied and swept
+	}
+
 	if account.Demotions() >= maxAccountDemotions {
 		if p.logger.IsDebug() {
 			p.logger.Debug(
@@ -509,6 +545,56 @@ func (p *TxPool) ResetWithHeaders(headers ...*types.Header) {
 	// to make sure the pool is up-to-date
 	p.processEvent(&blockchain.Event{
 		NewChain: headers,
+	})
+
+	if p.sweepCounter.Add(1)%sweepEveryBlocks == 0 {
+		p.sweepEmptyAccounts()
+	}
+}
+
+// testHookAfterAccountLookup lets tests run code in addTx between finding the
+// account and adding the tx to it. Always nil outside tests.
+var testHookAfterAccountLookup func(p *TxPool)
+
+// sweepEmptyAccounts removes accounts that hold no transactions and whose
+// pool nonce equals the chain's. An account used to stay in memory forever
+// once created, so fresh addresses (free to make) grew the pool's memory
+// without bound even after all their txs were gone (audit TX-M1). An account
+// whose txs are in a block not yet imported keeps a nonce ahead of the
+// chain and is left alone, so pending-nonce answers do not change.
+func (p *TxPool) sweepEmptyAccounts() {
+	p.accountsLock.Lock()
+	defer p.accountsLock.Unlock()
+
+	stateRoot := p.store.Header().StateRoot
+
+	p.accounts.Range(func(key, value interface{}) bool {
+		addr, _ := key.(types.Address)
+		account, _ := value.(*account)
+
+		if account == nil {
+			return true
+		}
+
+		account.promoted.lock(true)
+		account.enqueued.lock(true)
+		account.nonceToTx.lock()
+
+		empty := account.promoted.length() == 0 &&
+			account.enqueued.length() == 0 &&
+			len(account.nonceToTx.mapping) == 0 &&
+			account.getNonce() == p.store.GetNonce(stateRoot, addr)
+
+		if empty {
+			p.accounts.Delete(addr)
+			atomic.AddUint64(&p.accounts.count, ^uint64(0))
+		}
+
+		account.nonceToTx.unlock()
+		account.enqueued.unlock()
+		account.promoted.unlock()
+
+		return true
 	})
 }
 
@@ -570,7 +656,9 @@ func (p *TxPool) processEvent(event *blockchain.Event) {
 
 	if !p.sealing.Load() {
 		// only non-validator cleanup inactive accounts
-		p.updateAccountSkipsCounts(stateNonces)
+		p.updateAccountSkipsCounts(stateNonces, maxAccountSkips)
+	} else {
+		p.updateAccountSkipsCounts(stateNonces, maxValidatorAccountSkips)
 	}
 }
 
@@ -597,30 +685,6 @@ func (p *TxPool) validateTx(tx *types.Transaction) error {
 		metrics.IncrCounter([]string{txPoolMetrics, "negative_value_tx"}, 1)
 
 		return ErrNegativeValue
-	}
-
-	// Check if the transaction is signed properly
-
-	// Extract the sender
-	from, signerErr := p.signer.Sender(tx)
-	if signerErr != nil {
-		metrics.IncrCounter([]string{txPoolMetrics, "invalid_signature_txs"}, 1)
-
-		return ErrExtractSignature
-	}
-
-	// If the from field is set, check that
-	// it matches the signer
-	if tx.From != types.ZeroAddress &&
-		tx.From != from {
-		metrics.IncrCounter([]string{txPoolMetrics, "invalid_sender_txs"}, 1)
-
-		return ErrInvalidSender
-	}
-
-	// If no address was set, update it
-	if tx.From == types.ZeroAddress {
-		tx.From = from
 	}
 
 	// Grab current block number
@@ -705,6 +769,33 @@ func (p *TxPool) validateTx(tx *types.Transaction) error {
 		return ErrUnderpriced
 	}
 
+	// Everything above is cheap and needs no sender. Recover the signer only
+	// now: gossiped junk used to cost every node an ecrecover first, before
+	// failing a check that needed no sender at all (audit TP-M2).
+	// Check if the transaction is signed properly
+
+	// Extract the sender
+	from, signerErr := p.signer.Sender(tx)
+	if signerErr != nil {
+		metrics.IncrCounter([]string{txPoolMetrics, "invalid_signature_txs"}, 1)
+
+		return ErrExtractSignature
+	}
+
+	// If the from field is set, check that
+	// it matches the signer
+	if tx.From != types.ZeroAddress &&
+		tx.From != from {
+		metrics.IncrCounter([]string{txPoolMetrics, "invalid_sender_txs"}, 1)
+
+		return ErrInvalidSender
+	}
+
+	// If no address was set, update it
+	if tx.From == types.ZeroAddress {
+		tx.From = from
+	}
+
 	// Check nonce ordering
 	if p.store.GetNonce(stateRoot, tx.From) > tx.Nonce {
 		metrics.IncrCounter([]string{txPoolMetrics, "nonce_too_low_tx"}, 1)
@@ -745,6 +836,7 @@ func (p *TxPool) validateTx(tx *types.Transaction) error {
 
 		return ErrBlockLimitExceeded
 	}
+
 
 	return nil
 }
@@ -810,8 +902,17 @@ func (p *TxPool) addTx(origin txOrigin, tx *types.Transaction) error {
 	// calculate tx hash
 	tx.ComputeHash(p.store.Header().Number)
 
+	// Held until the tx is queued so a sweep cannot remove this account
+	// between looking it up and adding to it.
+	p.accountsLock.RLock()
+	defer p.accountsLock.RUnlock()
+
 	// initialize account for this address once or retrieve existing one
 	account := p.getOrCreateAccount(tx.From)
+
+	if testHookAfterAccountLookup != nil {
+		testHookAfterAccountLookup(p)
+	}
 
 	account.promoted.lock(true)
 	account.enqueued.lock(true)
@@ -939,6 +1040,10 @@ func (p *TxPool) handlePromoteRequest(req promoteRequest) {
 	addr := req.account
 	account := p.accounts.get(addr)
 
+	if account == nil {
+		return // already emptied and swept
+	}
+
 	// promote enqueued txs
 	promoted, pruned := account.promote()
 	if p.logger.IsDebug() {
@@ -986,7 +1091,7 @@ func (p *TxPool) addGossipTx(obj interface{}, _ peer.ID) {
 
 	// decode tx
 	if err := tx.UnmarshalRLP(raw.Raw.Value); err != nil {
-		p.logger.Error("failed to decode broadcast tx", "err", err)
+		p.logger.Debug("failed to decode broadcast tx", "err", err)
 
 		return
 	}
@@ -1001,7 +1106,9 @@ func (p *TxPool) addGossipTx(obj interface{}, _ peer.ID) {
 			return
 		}
 
-		p.logger.Error("failed to add broadcast tx", "err", err, "hash", tx.Hash.String())
+		// Debug, not Error: gossip is open to anyone, and one line per
+		// rejected tx let junk grow validator logs without bound.
+		p.logger.Debug("failed to add broadcast tx", "err", err, "hash", tx.Hash.String())
 	}
 }
 
@@ -1065,7 +1172,7 @@ func (p *TxPool) resetAccounts(stateNonces map[types.Address]uint64) {
 
 // updateAccountSkipsCounts update the accounts' skips,
 // the number of the consecutive blocks that doesn't have the account's transactions
-func (p *TxPool) updateAccountSkipsCounts(latestActiveAccounts map[types.Address]uint64) {
+func (p *TxPool) updateAccountSkipsCounts(latestActiveAccounts map[types.Address]uint64, limit uint64) {
 	stateRoot := p.store.Header().StateRoot
 	p.accounts.Range(
 		func(key, value interface{}) bool {
@@ -1085,7 +1192,7 @@ func (p *TxPool) updateAccountSkipsCounts(latestActiveAccounts map[types.Address
 				return true
 			}
 
-			if account.incrementSkips() < maxAccountSkips {
+			if account.incrementSkips() < limit {
 				return true
 			}
 
@@ -1143,8 +1250,12 @@ func isReplacementPriceBumped(oldPrice, newPrice *big.Int) bool {
 	return lhs.Cmp(rhs) >= 0 && newPrice.Cmp(oldPrice) > 0
 }
 
-// isRelayableGossipTx is the gossip validator for the transaction topic.
-func isRelayableGossipTx(data []byte) bool {
+// isRelayableGossipTx is the gossip validator for the transaction topic. A tx
+// is relayed only if it passes the same checks as one sent to this node over
+// RPC: unfunded or junk-signed txs used to be relayed by every node, each one
+// costing every node an ecrecover, state reads and an ERROR log line
+// (audit TP-M2).
+func (p *TxPool) isRelayableGossipTx(data []byte) bool {
 	raw := &proto.Txn{}
 	if err := protobuf.Unmarshal(data, raw); err != nil {
 		return false
@@ -1154,11 +1265,24 @@ func isRelayableGossipTx(data []byte) bool {
 		return false
 	}
 
-	return types.CheckRawTx(raw.Raw.Value) == nil
+	if types.CheckRawTx(raw.Raw.Value) != nil {
+		return false
+	}
+
+	if !p.signerReady.Load() {
+		return true // still starting up: structural checks only
+	}
+
+	tx := new(types.Transaction)
+	if err := tx.UnmarshalRLP(raw.Raw.Value); err != nil {
+		return false
+	}
+
+	return p.validateTx(tx) == nil
 }
 
-// maxAccountShareDivisor sets the most of the pool one account may hold while
-// the pool is under pressure: 1/8 of all slots.
+// maxAccountShareDivisor sets the most of the pool one account may hold: 1/8 of
+// all slots.
 const maxAccountShareDivisor = 8
 
 // checkAccountPending applies the limits that depend on everything the account
@@ -1168,9 +1292,10 @@ const maxAccountShareDivisor = 8
 //     not each one alone. Before, a small balance could back thousands of
 //     transactions that each claim the whole block gas limit: only one fits
 //     per block, so they jammed the pool for hours at almost no cost.
-//   - While the pool is nearly full, one account may not grow past its share,
-//     so a single sender cannot crowd everyone else out. Normal use, including
-//     large batches, is unaffected while there is room.
+//   - One account may not grow past its share of the pool, so a few senders
+//     cannot crowd everyone else out. The share used to apply only above 80%
+//     full, so one account took 80% and two more filled the rest, after which
+//     honest txs were refused at any price (audit TP-M1).
 func (p *TxPool) checkAccountPending(account *account, tx, replaced *types.Transaction) error {
 	pendingCost := new(big.Int)
 
@@ -1185,8 +1310,7 @@ func (p *TxPool) checkAccountPending(account *account, tx, replaced *types.Trans
 		pendingSlots += slotsRequired(pending)
 	}
 
-	if replaced == nil && p.gauge.highPressure() &&
-		pendingSlots+slotsRequired(tx) > p.gauge.max/maxAccountShareDivisor {
+	if replaced == nil && pendingSlots+slotsRequired(tx) > p.gauge.max/maxAccountShareDivisor {
 		metrics.IncrCounter([]string{txPoolMetrics, "account_share_full_tx"}, 1)
 
 		return ErrAccountPoolShareFull

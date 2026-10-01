@@ -41,9 +41,23 @@ type StatusResponse struct {
 	Queued  uint64 `json:"queued"`
 }
 
+// maxContentInputBytes bounds the transaction input data one txpool_content
+// response carries. A full pool held ~250 MB of input, so one call built a
+// ~250 MB response and a batch of them several GB (audit RPC-M1). Txs past
+// the budget are listed with every field but their input.
+const maxContentInputBytes = 8 << 20
+
+// txpoolDumpSlots lets one txpool_content / txpool_inspect be built at a time.
+var txpoolDumpSlots = make(chan struct{}, 1)
+
 // Create response for txpool_content request.
 // See https://geth.ethereum.org/docs/rpc/ns-txpool#txpool_content.
 func (t *TxPool) Content() (interface{}, error) {
+	txpoolDumpSlots <- struct{}{}
+	defer func() { <-txpoolDumpSlots }()
+
+	inputBudget := maxContentInputBytes
+
 	convertTxMap := func(txMap map[types.Address][]*types.Transaction) map[types.Address]map[uint64]*transaction {
 		result := make(map[types.Address]map[uint64]*transaction, len(txMap))
 
@@ -51,7 +65,13 @@ func (t *TxPool) Content() (interface{}, error) {
 			result[addr] = make(map[uint64]*transaction, len(txs))
 
 			for _, tx := range txs {
-				result[addr][tx.Nonce] = toTransaction(tx, nil, &types.ZeroHash, nil)
+				out := toTransaction(tx, nil, &types.ZeroHash, nil)
+
+				if inputBudget -= len(tx.Input); inputBudget < 0 {
+					out.Input = argBytes{}
+				}
+
+				result[addr][tx.Nonce] = out
 			}
 		}
 
@@ -70,6 +90,9 @@ func (t *TxPool) Content() (interface{}, error) {
 // Create response for txpool_inspect request.
 // See https://geth.ethereum.org/docs/rpc/ns-txpool#txpool_inspect.
 func (t *TxPool) Inspect() (interface{}, error) {
+	txpoolDumpSlots <- struct{}{}
+	defer func() { <-txpoolDumpSlots }()
+
 	baseFee := t.store.GetBaseFee()
 	convertTxMap := func(txMap map[types.Address][]*types.Transaction) map[string]map[string]string {
 		result := make(map[string]map[string]string, len(txMap))

@@ -35,12 +35,24 @@ type StructLog struct {
 	ReturnData    string            `json:"returnData,omitempty"`
 }
 
+// maxStructLogBytes bounds the memory one trace's struct logs may take. Gas
+// and time were bounded but memory was not: a contract keeping a deep stack
+// made each step copy it, ~2 GB within the default 5 s (audit RPC-M2).
+const maxStructLogBytes = 128 << 20
+
+// ErrTraceTooLarge is returned when a trace's struct logs pass maxStructLogBytes.
+var ErrTraceTooLarge = errors.New("trace result too large: enable fewer of memory, stack and storage, or trace less")
+
 type StructTracer struct {
 	Config Config
 
 	cancelLock sync.RWMutex
 	reason     error
 	interrupt  bool
+
+	// logBytes estimates the memory taken by logs, over the whole trace
+	// (a traced block keeps every transaction's result).
+	logBytes uint64
 
 	logs        []StructLog
 	gasLimit    uint64
@@ -80,13 +92,15 @@ func (t *StructTracer) cancelled() bool {
 	return t.interrupt
 }
 
+// Clear resets the per-transaction state between the transactions of a traced
+// block. A cancellation (timeout, size cap) is kept: clearing it let a timeout
+// that fired between two transactions be lost, so the trace ran on past its
+// deadline (audit RPC-M2).
 func (t *StructTracer) Clear() {
 	t.cancelLock.Lock()
 	defer t.cancelLock.Unlock()
 
-	t.reason = nil
-	t.interrupt = false
-	t.logs = t.logs[:0]
+	t.logs = nil
 	t.gasLimit = 0
 	t.consumedGas = 0
 	t.output = t.output[:0]
@@ -307,6 +321,8 @@ func (t *StructTracer) ExecuteState(
 	}
 
 	if t.Config.EnableStructLogs {
+		t.addLogBytes(structLogSize(memory, stack, storage, returnData, errStr))
+
 		t.logs = append(
 			t.logs,
 			StructLog{
@@ -355,4 +371,41 @@ func (t *StructTracer) GetResult() (interface{}, error) {
 		ReturnValue: returnValue,
 		StructLogs:  t.logs,
 	}, nil
+}
+
+// structLogSize estimates the bytes one struct log keeps alive.
+func structLogSize(memory, stack []string, storage map[string]string, returnData, errStr string) uint64 {
+	const perString = 16 // string header
+
+	size := uint64(160 + len(returnData) + len(errStr))
+
+	for _, m := range memory {
+		size += uint64(len(m)) + perString
+	}
+
+	for _, v := range stack {
+		size += uint64(len(v)) + perString
+	}
+
+	for k, v := range storage {
+		size += uint64(len(k)+len(v)) + 2*perString + 48 // map entry overhead
+	}
+
+	return size
+}
+
+// addLogBytes counts n more log bytes and stops the trace once the total
+// passes maxStructLogBytes.
+func (t *StructTracer) addLogBytes(n uint64) {
+	if t.logBytes += n; t.logBytes <= maxStructLogBytes {
+		return
+	}
+
+	t.cancelLock.Lock()
+	defer t.cancelLock.Unlock()
+
+	if !t.interrupt {
+		t.interrupt = true
+		t.reason = ErrTraceTooLarge
+	}
 }

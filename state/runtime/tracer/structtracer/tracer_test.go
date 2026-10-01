@@ -158,9 +158,11 @@ func TestStructTracerClear(t *testing.T) {
 				EnableReturnData: true,
 				EnableStructLogs: true,
 			},
-			reason:      nil,
-			interrupt:   false,
-			logs:        []StructLog{},
+			// A cancellation survives Clear (audit RPC-M2).
+			reason:    errors.New("timeout"),
+			interrupt: true,
+			// A fresh slice: an earlier transaction's result still holds the old one.
+			logs:        nil,
 			gasLimit:    0,
 			consumedGas: 0,
 			output:      []byte{},

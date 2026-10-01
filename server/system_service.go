@@ -5,12 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/w-chain-team/node/blockchain"
 	"github.com/w-chain-team/node/network/common"
 	"github.com/w-chain-team/node/server/proto"
 	"github.com/w-chain-team/node/types"
-	"github.com/libp2p/go-libp2p/core/peer"
 	empty "google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -207,7 +208,19 @@ func (s *systemService) BlockByNumber(
 	}, nil
 }
 
+// exportRunning allows one Export at a time. Each one streams the chain from
+// block 0 by default; many at once starved the node's disk and memory
+// (audit G-M1).
+var exportRunning atomic.Bool
+
+var errExportRunning = errors.New("an export is already running on this node; try again when it finishes")
+
 func (s *systemService) Export(req *proto.ExportRequest, stream proto.System_ExportServer) error {
+	if !exportRunning.CompareAndSwap(false, true) {
+		return errExportRunning
+	}
+	defer exportRunning.Store(false)
+
 	var (
 		from uint64 = 0
 		to   *uint64

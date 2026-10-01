@@ -29,6 +29,9 @@ var (
 	ErrTraceGenesisBlock = errors.New("genesis is not traceable")
 	// ErrNoConfig is an error returns when config is empty
 	ErrNoConfig = errors.New("missing config object")
+	// ErrTraceBlockGasLimit is returned for a debug_traceBlock input block
+	// whose gas limit is above the chain's
+	ErrTraceBlockGasLimit = errors.New("block gas limit is above the chain's gas limit")
 )
 
 type debugBlockchainStore interface {
@@ -151,6 +154,13 @@ func (d *Debug) TraceBlock(
 			block := &types.Block{}
 			if err := block.UnmarshalRLP(blockByte); err != nil {
 				return nil, err
+			}
+
+			// A caller-made block could claim any gas limit, so its txs
+			// ran without the gas bound mined blocks have (audit RPC-M2).
+			if head := d.store.Header(); block.Header == nil || head == nil ||
+				block.Header.GasLimit > head.GasLimit {
+				return nil, ErrTraceBlockGasLimit
 			}
 
 			return d.traceBlock(block, config)

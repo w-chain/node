@@ -85,19 +85,15 @@ func TestAddTx_AccountShareUnderPressure(t *testing.T) {
 	rich := new(big.Int).Lsh(big.NewInt(1), 200)
 	pool, sign, addr := newPendingTestPool(t, maxSlots, rich)
 
-	// With room in the pool there is no per-account limit: a batch of 20 is fine.
-	for nonce := uint64(0); nonce < 20; nonce++ {
-		require.NoError(t, pool.addTx(local, sign(newTx(addr, nonce, 1))), "batch tx %d", nonce)
+	// One account may fill its share, and no more, even with room in the
+	// pool: the share used to apply only above 80% full, so three accounts
+	// could fill the whole pool (audit TP-M1).
+	for nonce := uint64(0); nonce < maxSlots/maxAccountShareDivisor; nonce++ {
+		require.NoError(t, pool.addTx(local, sign(newTx(addr, nonce, 1))), "tx %d within the share", nonce)
 	}
 
-	// The pool promotes in the background; here we mark all 20 as ready.
-	pool.accounts.get(addr).setNonce(20)
-
-	// Push the pool over the pressure mark with other slots.
-	pool.gauge.increase(maxSlots*highPressureMark/100 - 20 + 1)
-	require.True(t, pool.gauge.highPressure())
-
-	require.ErrorIs(t, pool.addTx(local, sign(newTx(addr, 20, 1))), ErrAccountPoolShareFull)
+	require.False(t, pool.gauge.highPressure(), "plenty of room left in the pool")
+	require.ErrorIs(t, pool.addTx(local, sign(newTx(addr, maxSlots/maxAccountShareDivisor, 1))), ErrAccountPoolShareFull)
 
 	// Another account still gets in.
 	pool2Tx := func() error {

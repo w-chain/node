@@ -389,6 +389,7 @@ func TestTraceBlock(t *testing.T) {
 			input:  blockHex,
 			config: &TraceConfig{},
 			store: &debugEndpointMockStore{
+				headerFn: func() *types.Header { return testLatestHeader },
 				traceBlockFn: func(block *types.Block, tracer tracer.Tracer) ([]interface{}, error) {
 					assert.Equal(t, testLatestBlock, block)
 
@@ -397,6 +398,17 @@ func TestTraceBlock(t *testing.T) {
 			},
 			result: testTraceResults,
 			err:    false,
+		},
+		{
+			// RPC-M2: a caller-made block may not claim more gas than the chain allows.
+			name:   "should reject a block above the chain's gas limit",
+			input:  hex.EncodeToHex(wrapHeaderWithTestBlock(&types.Header{Number: 100, GasLimit: testLatestHeader.GasLimit + 1}).MarshalRLP()),
+			config: &TraceConfig{},
+			store: &debugEndpointMockStore{
+				headerFn: func() *types.Header { return testLatestHeader },
+			},
+			result: nil,
+			err:    true,
 		},
 		{
 			name:   "should return error in case of invalid block",

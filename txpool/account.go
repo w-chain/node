@@ -46,12 +46,10 @@ func (m *accountsMap) exists(addr types.Address) bool {
 // from each of the promoted queues.
 func (m *accountsMap) getPrimaries() (primaries []*types.Transaction) {
 	m.Range(func(key, value interface{}) bool {
-		addressKey, ok := key.(types.Address)
+		account, ok := value.(*account)
 		if !ok {
 			return false
 		}
-
-		account := m.get(addressKey)
 
 		account.promoted.lock(false)
 		defer account.promoted.unlock()
@@ -85,12 +83,10 @@ func (m *accountsMap) get(addr types.Address) *account {
 // promoted returns the number of all promoted transactons.
 func (m *accountsMap) promoted() (total uint64) {
 	m.Range(func(key, value interface{}) bool {
-		accountKey, ok := key.(types.Address)
+		account, ok := value.(*account)
 		if !ok {
 			return false
 		}
-
-		account := m.get(accountKey)
 
 		account.promoted.lock(false)
 		defer account.promoted.unlock()
@@ -112,7 +108,11 @@ func (m *accountsMap) allTxs(includeEnqueued bool) (
 
 	m.Range(func(key, value interface{}) bool {
 		addr, _ := key.(types.Address)
-		account := m.get(addr)
+		account, ok := value.(*account)
+
+		if !ok {
+			return true
+		}
 
 		account.promoted.lock(false)
 		defer account.promoted.unlock()
