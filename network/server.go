@@ -40,6 +40,14 @@ const (
 	// because when queue is full, validation is throttled and new messages are dropped.
 	validateBufferSize = 1024
 
+	// MaxGossipMessageSize is the largest gossip message a node sends or
+	// accepts. pubsub's default is 1 MiB, and a message over the limit is
+	// silently dropped by the sender: a proposal carrying a block over 1 MiB
+	// never reached any validator, and every proposer built the same block
+	// from its pool, so the chain halted (audit NET-C1). Ethereum's gossip
+	// uses 10 MiB; the proposer keeps blocks far below this (blockByteBudget).
+	MaxGossipMessageSize = 16 << 20
+
 	// networkMetrics is a prefix used for network-related metrics
 	networkMetrics = "network"
 )
@@ -168,6 +176,7 @@ func NewServer(logger hclog.Logger, config *Config) (*Server, error) {
 		context.Background(),
 		host, pubsub.WithPeerOutboundQueueSize(peerOutboundBufferSize),
 		pubsub.WithValidateQueueSize(validateBufferSize),
+		pubsub.WithMaxMessageSize(MaxGossipMessageSize),
 	)
 	if err != nil {
 		return nil, err

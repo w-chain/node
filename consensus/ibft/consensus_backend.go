@@ -224,9 +224,17 @@ func (i *backendIBFT) buildBlock(parent *types.Header) (*types.Block, error) {
 	writeCtx, cancelFn := context.WithDeadline(context.Background(), potentialTimestamp)
 	defer cancelFn()
 
+	// Bytes left for transactions once the header (with the validator list
+	// in its extra data) is accounted for.
+	txByteBudget := uint64(0)
+	if budget, headerBytes := blockByteBudget(m.validators.Len()), uint64(len(header.MarshalRLP())); budget > headerBytes {
+		txByteBudget = budget - headerBytes
+	}
+
 	txs := i.writeTransactions(
 		writeCtx,
 		gasLimit,
+		txByteBudget,
 		header.Number,
 		transition,
 	)
@@ -316,6 +324,7 @@ type transitionInterface interface {
 func (i *backendIBFT) writeTransactions(
 	writeCtx context.Context,
 	gasLimit,
+	byteBudget,
 	blockNumber uint64,
 	transition transitionInterface,
 ) (executed []*types.Transaction) {
@@ -343,6 +352,8 @@ func (i *backendIBFT) writeTransactions(
 
 	i.txpool.Prepare()
 
+	bytesUsed := uint64(0)
+
 write:
 	for {
 		select {
@@ -354,6 +365,8 @@ write:
 				i.txpool.Peek(),
 				transition,
 				gasLimit,
+				byteBudget,
+				byteBudget-bytesUsed,
 			)
 
 			if !ok {
@@ -366,6 +379,7 @@ write:
 			case success:
 				executed = append(executed, tx)
 				successful++
+				bytesUsed += tx.Size() + txBytesFraming
 			case fail:
 				failed++
 			case skip:
@@ -384,6 +398,8 @@ func (i *backendIBFT) writeTransaction(
 	tx *types.Transaction,
 	transition transitionInterface,
 	gasLimit uint64,
+	byteBudget uint64,
+	bytesLeft uint64,
 ) (*txExeResult, bool) {
 	if tx == nil {
 		return nil, false
@@ -394,6 +410,22 @@ func (i *backendIBFT) writeTransaction(
 
 		// continue processing
 		return &txExeResult{tx, fail}, true
+	}
+
+	// Blocks are bounded in bytes as well as gas (audit NET-C1). A
+	// transaction that can never fit any block is dropped like an over-gas
+	// one; one that merely does not fit the space left waits for the next
+	// block while smaller ones from other accounts still go in.
+	if txBytes := tx.Size() + txBytesFraming; txBytes > byteBudget {
+		i.txpool.Drop(tx)
+
+		return &txExeResult{tx, fail}, true
+	} else if txBytes > bytesLeft {
+		if bytesLeft < minTxBytes {
+			return nil, false
+		}
+
+		return &txExeResult{tx, skip}, true
 	}
 
 	if err := transition.Write(tx); err != nil {

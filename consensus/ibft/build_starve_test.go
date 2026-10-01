@@ -94,7 +94,7 @@ func TestWriteTransactions_BigGasLimitTxDoesNotStarveBlock(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
-	executed := b.writeTransactions(ctx, blockGas, 1, tr)
+	executed := b.writeTransactions(ctx, blockGas, maxBlockBytes, 1, tr)
 
 	// The attacker's first tx fits (21k used); its second claims 20M and no
 	// longer fits, so its account is skipped and the honest txs go in.
