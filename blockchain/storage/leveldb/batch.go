@@ -1,15 +1,18 @@
 package leveldb
 
 import (
-	"github.com/w-chain-team/node/blockchain/storage"
 	"github.com/syndtr/goleveldb/leveldb"
+	"github.com/syndtr/goleveldb/leveldb/opt"
+	"github.com/w-chain-team/node/blockchain/storage"
+	"github.com/w-chain-team/node/helper/common"
 )
 
 var _ storage.Batch = (*batchLevelDB)(nil)
 
 type batchLevelDB struct {
-	db *leveldb.DB
-	b  *leveldb.Batch
+	db         *leveldb.DB
+	b          *leveldb.Batch
+	writeSyncs *common.WriteSyncThrottle
 }
 
 func NewBatchLevelDB(db *leveldb.DB) *batchLevelDB {
@@ -28,5 +31,5 @@ func (b *batchLevelDB) Put(k []byte, v []byte) {
 }
 
 func (b *batchLevelDB) Write() error {
-	return b.db.Write(b.b, nil)
+	return b.db.Write(b.b, &opt.WriteOptions{Sync: b.writeSyncs.ShouldSync()})
 }

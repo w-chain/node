@@ -7,6 +7,7 @@ import (
 	gproto "google.golang.org/protobuf/proto"
 
 	"github.com/w-chain-team/node/types"
+	"github.com/w-chain-team/node/validators"
 )
 
 // maxStoredBytesPerSender bounds the consensus messages one validator can
@@ -62,12 +63,51 @@ func (i *backendIBFT) isRelayableIBFTMessage(data []byte) bool {
 
 // isValidatorAt reports whether addr is in the validator set for height.
 func (i *backendIBFT) isValidatorAt(addr types.Address, height uint64) bool {
-	validators, err := i.forkManager.GetValidators(height)
+	validators, err := i.messageValidators(height)
 	if err != nil || validators == nil {
 		return false
 	}
 
 	return validators.Includes(addr)
+}
+
+// messageValidators returns the validator set used to accept a consensus
+// message for height.
+func (i *backendIBFT) messageValidators(height uint64) (validators.Validators, error) {
+	return validatorsForMessage(height, func() uint64 { return i.blockchain.Header().Number }, i.forkManager.GetValidators)
+}
+
+// maxValidatorFallbackDistance is how far above head a message's height may
+// be and still be checked against the newest set this node can compute.
+const maxValidatorFallbackDistance = 2
+
+// validatorsForMessage returns the validator set for height, or the newest
+// set this node can compute when the set for height needs a block it has not
+// finished yet.
+//
+// The set for an epoch's first block E is read from the state after E-1. The
+// proposer of E proposes as soon as it has E-1, while other validators may
+// still be executing E-1. They used to drop that proposal, and stop relaying
+// it, until a round change (audit N1). Falling back only decides whether the
+// message is stored and relayed: go-ibft counts votes with the voting power of
+// the real set for the height once it starts it, and checks the proposer
+// against that set, so a sender outside the real set still has no effect.
+func validatorsForMessage(
+	height uint64,
+	headNumber func() uint64,
+	getValidators func(uint64) (validators.Validators, error),
+) (validators.Validators, error) {
+	vals, err := getValidators(height)
+	if err == nil && vals != nil {
+		return vals, nil
+	}
+
+	head := headNumber()
+	if height <= head+1 || height > head+maxValidatorFallbackDistance {
+		return vals, err
+	}
+
+	return getValidators(head + 1)
 }
 
 // storedMessageBudget mirrors what go-ibft keeps per sender: messages for

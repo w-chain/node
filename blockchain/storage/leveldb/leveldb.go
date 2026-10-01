@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/w-chain-team/node/blockchain/storage"
+	"github.com/w-chain-team/node/helper/common"
 	"github.com/hashicorp/go-hclog"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/opt"
@@ -48,14 +49,15 @@ func NewLevelDBStorageWithOpt(path string, logger hclog.Logger, opts *opt.Option
 		return nil, err
 	}
 
-	kv := &levelDBKV{db}
+	kv := &levelDBKV{db: db, writeSyncs: &common.WriteSyncThrottle{}}
 
 	return storage.NewKeyValueStorage(logger.Named("leveldb"), kv), nil
 }
 
 // levelDBKV is the leveldb implementation of the kv storage
 type levelDBKV struct {
-	db *leveldb.DB
+	db         *leveldb.DB
+	writeSyncs *common.WriteSyncThrottle
 }
 
 // Set sets the key-value pair in leveldb storage
@@ -83,5 +85,8 @@ func (l *levelDBKV) Close() error {
 }
 
 func (l *levelDBKV) NewBatch() storage.Batch {
-	return NewBatchLevelDB(l.db)
+	batch := NewBatchLevelDB(l.db)
+	batch.writeSyncs = l.writeSyncs
+
+	return batch
 }

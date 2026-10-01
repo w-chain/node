@@ -383,6 +383,14 @@ func NewServer(config *Config) (*Server, error) {
 		return nil, err
 	}
 
+	if err := m.blockchain.RewindToState(func(root types.Hash) bool {
+		_, err := m.executor.StateAt(root)
+
+		return err == nil
+	}); err != nil {
+		return nil, err
+	}
+
 	// initialize data in consensus layer
 	if err := m.consensus.Initialize(); err != nil {
 		return nil, err

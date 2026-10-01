@@ -63,6 +63,11 @@ func (b *BatchWriter) PutCanonicalHash(n uint64, hash types.Hash) {
 	b.putWithPrefix(CANONICAL, common.EncodeUint64ToBytes(n), hash.Bytes())
 }
 
+// DeleteCanonicalHash removes the canonical block hash for number n.
+func (b *BatchWriter) DeleteCanonicalHash(n uint64) {
+	b.batch.Delete(append(append(make([]byte, 0, len(CANONICAL)+8), CANONICAL...), common.EncodeUint64ToBytes(n)...))
+}
+
 func (b *BatchWriter) PutTotalDifficulty(hash types.Hash, diff *big.Int) {
 	b.putWithPrefix(DIFFICULTY, hash.Bytes(), diff.Bytes())
 }

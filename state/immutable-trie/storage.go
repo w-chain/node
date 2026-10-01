@@ -7,7 +7,9 @@ import (
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/syndtr/goleveldb/leveldb"
+	"github.com/syndtr/goleveldb/leveldb/opt"
 	"github.com/umbracle/fastrlp"
+	hcommon "github.com/w-chain-team/node/helper/common"
 	"github.com/w-chain-team/node/helper/hex"
 	"github.com/w-chain-team/node/types"
 )
@@ -43,21 +45,25 @@ type Storage interface {
 
 // KVStorage is a k/v storage on memory using leveldb
 type KVStorage struct {
-	db *leveldb.DB
+	db         *leveldb.DB
+	writeSyncs *hcommon.WriteSyncThrottle
 }
 
 // KVBatch is a batch write for leveldb
 type KVBatch struct {
-	db    *leveldb.DB
-	batch *leveldb.Batch
+	db         *leveldb.DB
+	batch      *leveldb.Batch
+	writeSyncs *hcommon.WriteSyncThrottle
 }
 
 func (b *KVBatch) Put(k, v []byte) {
 	b.batch.Put(k, v)
 }
 
+// Write commits the batch. A block's state is written in one batch, before
+// the block itself goes to the blockchain database.
 func (b *KVBatch) Write() error {
-	return b.db.Write(b.batch, nil)
+	return b.db.Write(b.batch, &opt.WriteOptions{Sync: b.writeSyncs.ShouldSync()})
 }
 
 func (kv *KVStorage) SetCode(hash types.Hash, code []byte) error {
@@ -74,7 +80,7 @@ func (kv *KVStorage) GetCode(hash types.Hash) ([]byte, bool) {
 }
 
 func (kv *KVStorage) Batch() Batch {
-	return &KVBatch{db: kv.db, batch: &leveldb.Batch{}}
+	return &KVBatch{db: kv.db, batch: &leveldb.Batch{}, writeSyncs: kv.writeSyncs}
 }
 
 func (kv *KVStorage) Put(k, v []byte) error {
@@ -104,7 +110,7 @@ func NewLevelDBStorage(path string, logger hclog.Logger) (Storage, error) {
 		return nil, err
 	}
 
-	return &KVStorage{db}, nil
+	return &KVStorage{db: db, writeSyncs: &hcommon.WriteSyncThrottle{}}, nil
 }
 
 type memStorage struct {

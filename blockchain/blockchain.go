@@ -288,6 +288,64 @@ func (b *Blockchain) ComputeGenesis() error {
 	return nil
 }
 
+// RewindToState moves the head back to the newest canonical block whose
+// state is stored, if the head's state is missing.
+//
+// A block's state goes to the state database before the block goes to the
+// blockchain database, so a crash keeps them in step. A power loss can still
+// keep the newer block and lose its state: the node then started on a head it
+// could not execute on top of, failed every following block and stayed stuck
+// until a full resync (audit BI-M1). After the rewind the syncer fetches the
+// dropped blocks again.
+func (b *Blockchain) RewindToState(hasState func(root types.Hash) bool) error {
+	head := b.Header()
+	if head == nil || hasState(head.StateRoot) {
+		return nil
+	}
+
+	target := head
+
+	for !hasState(target.StateRoot) {
+		if target.Number == 0 {
+			return fmt.Errorf("state of the genesis block %s is missing", target.Hash)
+		}
+
+		parent, ok := b.GetHeaderByHash(target.ParentHash)
+		if !ok {
+			return fmt.Errorf("failed to get header with hash %s", target.ParentHash)
+		}
+
+		target = parent
+	}
+
+	td, ok := b.GetTD(target.Hash)
+	if !ok {
+		return fmt.Errorf("failed to read difficulty of block %d", target.Number)
+	}
+
+	batchWriter := storage.NewBatchWriter(b.db)
+	batchWriter.PutHeadHash(target.Hash)
+	batchWriter.PutHeadNumber(target.Number)
+
+	for n := target.Number + 1; n <= head.Number; n++ {
+		batchWriter.DeleteCanonicalHash(n)
+	}
+
+	if err := batchWriter.WriteBatch(); err != nil {
+		return err
+	}
+
+	b.setCurrentHeader(target, td)
+
+	b.logger.Warn(
+		"state of the head block is missing (unclean shutdown), moved the head back",
+		"from", head.Number,
+		"to", target.Number,
+	)
+
+	return nil
+}
+
 func (b *Blockchain) GetConsensus() Verifier {
 	return b.consensus
 }

@@ -163,8 +163,8 @@ func (i *backendIBFT) IsValidValidator(msg *protoIBFT.Message) bool {
 		return false
 	}
 
-	validators, err := i.forkManager.GetValidators(msg.View.Height)
-	if err != nil {
+	validators, err := i.messageValidators(msg.View.Height)
+	if err != nil || validators == nil {
 		return false
 	}
 
