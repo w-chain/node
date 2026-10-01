@@ -28,6 +28,8 @@ const (
 var (
 	errTimeout      = errors.New("timeout awaiting block from peer")
 	errSlowSyncPeer = errors.New("peer is sending blocks too slowly")
+
+	errUnexpectedSyncBlock = errors.New("peer sent a block out of sequence")
 )
 
 // XXX: Don't use this syncer for the consensus that may cause fork.
@@ -255,7 +257,10 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 		s.blockchain.UnsubscribeEvents(subscription)
 	}()
 
-	var lastReceivedNumber uint64
+	var (
+		lastReceivedNumber uint64
+		receivedCount      uint64
+	)
 
 	// A peer streams blocks it already has, so an honest stream is fast. One
 	// that claims a high block but sends just under the per-block timeout
@@ -291,6 +296,18 @@ func (s *syncer) bulkSyncWithPeer(peerID peer.ID, peerLatestBlock uint64,
 			if block.Number() == 0 {
 				continue
 			}
+
+			// A peer streams from localLatest+1 upward one block at a time.
+			// Anything else is refused: old canonical blocks still verify, but
+			// their write is a silent no-op, so a peer replaying them kept this
+			// node stuck while each one re-ran the new-block callback (audit
+			// SYN-H2). The caller moves on to another peer.
+			if want := localLatest + 1 + receivedCount; block.Number() != want {
+				return lastReceivedNumber, false, fmt.Errorf("%w: got block %d, want %d",
+					errUnexpectedSyncBlock, block.Number(), want)
+			}
+
+			receivedCount++
 
 			fullBlock, err := s.blockchain.VerifyFinalizedBlock(block)
 			if err != nil {

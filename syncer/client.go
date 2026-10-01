@@ -401,13 +401,21 @@ func (m *syncPeerClient) newSyncPeerClient(peerID peer.ID) (proto.SyncPeerClient
 }
 
 // fromProto gets block from gRPC response data
-func fromProto(protoBlock *proto.Block) (*types.Block, error) {
+func fromProto(protoBlock *proto.Block) (block *types.Block, err error) {
+	// A peer controls these bytes, and this runs on a goroutine with no other
+	// recovery: a decode panic must reject the block, not end the process.
+	defer func() {
+		if r := recover(); r != nil {
+			block, err = nil, fmt.Errorf("malformed block from peer: %v", r)
+		}
+	}()
+
 	// A peer controls these bytes; bound the decoder's allocations first.
 	if err := types.CheckRLPDensity(protoBlock.Block); err != nil {
 		return nil, err
 	}
 
-	block := &types.Block{}
+	block = &types.Block{}
 	if err := block.UnmarshalRLP(protoBlock.Block); err != nil {
 		return nil, err
 	}

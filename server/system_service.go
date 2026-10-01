@@ -47,14 +47,49 @@ func (s *systemService) GetStatus(ctx context.Context, req *empty.Empty) (*proto
 	return status, nil
 }
 
-// Subscribe implements the blockchain event subscription service
+// subscribeQueueSize is how many events one Subscribe client may have waiting.
+// A client further behind than this is disconnected.
+const subscribeQueueSize = 64
+
+var errSubscriberTooSlow = errors.New("subscriber is not reading events")
+
+// Subscribe implements the blockchain event subscription service.
+//
+// Events are taken off the blockchain subscription right away and handed to a
+// separate sender. The blockchain blocks on every subscriber when it writes a
+// block, so a client that stopped reading used to freeze block import on the
+// node (audit G-C1). Now such a client is disconnected instead.
 func (s *systemService) Subscribe(req *empty.Empty, stream proto.System_SubscribeServer) error {
 	sub := s.server.blockchain.SubscribeEvents()
+	defer s.server.blockchain.UnsubscribeEvents(sub)
+
+	queue := make(chan *proto.BlockchainEvent, subscribeQueueSize)
+	sendDone := make(chan error, 1)
+
+	go func() {
+		for pEvent := range queue {
+			if err := stream.Send(pEvent); err != nil {
+				sendDone <- err
+
+				return
+			}
+		}
+
+		sendDone <- nil
+	}()
+
+	defer close(queue)
 
 	for {
 		evnt := sub.GetEvent()
 		if evnt == nil {
-			break
+			return nil
+		}
+
+		select {
+		case err := <-sendDone:
+			return err
+		default:
 		}
 
 		pEvent := &proto.BlockchainEvent{
@@ -76,16 +111,12 @@ func (s *systemService) Subscribe(req *empty.Empty, stream proto.System_Subscrib
 			)
 		}
 
-		err := stream.Send(pEvent)
-
-		if err != nil {
-			break
+		select {
+		case queue <- pEvent:
+		default:
+			return errSubscriberTooSlow
 		}
 	}
-
-	s.server.blockchain.UnsubscribeEvents(sub)
-
-	return nil
 }
 
 // PeersAdd implements the 'peers add' operator service

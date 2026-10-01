@@ -164,6 +164,14 @@ type AggregatedSeal struct {
 }
 
 func (s *AggregatedSeal) Num() int {
+	// An empty RLP list decodes to a seal with no bitmap. It used to panic
+	// here, inside header hashing and parent-seal checks, so one crafted
+	// header from a peer or a proposer crashed every node that decoded it
+	// (audit IB-C1). No bitmap means no seals.
+	if s == nil || s.Bitmap == nil {
+		return 0
+	}
+
 	return s.Bitmap.BitLen()
 }
 

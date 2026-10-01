@@ -115,8 +115,9 @@ func TestGasHelper_MaxPriorityFeePerGas(t *testing.T) {
 		},
 		{
 			Name: "Number of blocks in chain smaller than numOfBlocksToCheck",
-			Expected: DefaultGasHelperConfig.LastPrice.Mul(
-				DefaultGasHelperConfig.LastPrice, big.NewInt(2)), // at least two times of default last price
+			// at least two times of default last price (on a copy: the shared
+			// default config must not be modified by the test table)
+			Expected: new(big.Int).Mul(DefaultGasHelperConfig.LastPrice, big.NewInt(2)),
 			GetBackend: func() Blockchain {
 				backend := createTestBlocks(t, 10)
 				createTestTxs(t, backend, 3, 200)
@@ -126,8 +127,9 @@ func TestGasHelper_MaxPriorityFeePerGas(t *testing.T) {
 		},
 		{
 			Name: "Number of blocks in chain higher than numOfBlocksToCheck",
-			Expected: DefaultGasHelperConfig.LastPrice.Mul(
-				DefaultGasHelperConfig.LastPrice, big.NewInt(2)), // at least two times of default last price
+			// at least two times of default last price (on a copy: the shared
+			// default config must not be modified by the test table)
+			Expected: new(big.Int).Mul(DefaultGasHelperConfig.LastPrice, big.NewInt(2)),
 			GetBackend: func() Blockchain {
 				backend := createTestBlocks(t, 30)
 				createTestTxs(t, backend, 3, 200)
@@ -137,8 +139,9 @@ func TestGasHelper_MaxPriorityFeePerGas(t *testing.T) {
 		},
 		{
 			Name: "Not enough transactions in first 20 blocks, so read some more blocks",
-			Expected: DefaultGasHelperConfig.LastPrice.Mul(
-				DefaultGasHelperConfig.LastPrice, big.NewInt(2)), // at least two times of default last price
+			// at least two times of default last price (on a copy: the shared
+			// default config must not be modified by the test table)
+			Expected: new(big.Int).Mul(DefaultGasHelperConfig.LastPrice, big.NewInt(2)),
 			GetBackend: func() Blockchain {
 				backend := createTestBlocks(t, 50)
 				createTestTxs(t, backend, 1, 200)

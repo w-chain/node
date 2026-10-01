@@ -489,6 +489,11 @@ const maxConcurrentEVMCalls = 64
 
 var evmCallSlots = make(chan struct{}, maxConcurrentEVMCalls)
 
+// maxConcurrentFeeHistory bounds eth_feeHistory requests running at once.
+const maxConcurrentFeeHistory = 16
+
+var feeHistorySlots = make(chan struct{}, maxConcurrentFeeHistory)
+
 // Call executes a smart contract call using the transaction object data
 func (e *Eth) Call(arg *txnArgs, filter BlockNumberOrHash, apiOverride *stateOverride) (interface{}, error) {
 	evmCallSlots <- struct{}{}
@@ -908,6 +913,10 @@ func (e *Eth) MaxPriorityFeePerGas() (interface{}, error) {
 
 func (e *Eth) FeeHistory(blockCount argUint64, newestBlock BlockNumber,
 	rewardPercentiles []float64) (interface{}, error) {
+	// Each request reads up to 1024 blocks; bound how many run at once.
+	feeHistorySlots <- struct{}{}
+	defer func() { <-feeHistorySlots }()
+
 	block, err := GetNumericBlockNumber(newestBlock, e.store)
 	if err != nil {
 		return nil, fmt.Errorf("could not parse newest block argument. Error: %w", err)

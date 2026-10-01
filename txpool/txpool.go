@@ -378,17 +378,29 @@ func (p *TxPool) Pop(tx *types.Transaction) {
 		account.promoted.unlock()
 	}()
 
-	// pop the top most promoted tx
+	// The head may no longer be the tx the caller executed: a block import
+	// can prune it (and the next tx would be removed in its place), or a
+	// same-nonce replacement can land between Peek and Pop. Removing blindly
+	// and accounting by the caller's tx broke the slot gauge, which wrapped
+	// to ~2^64 and left the pool refusing every tx (audit TP-H1).
+	head := account.promoted.peek()
+	if head == nil || head.Nonce != tx.Nonce {
+		// Already removed; nothing of this nonce left to pop.
+		return
+	}
+
+	// pop the top most promoted tx (the executed one, or a replacement of
+	// it that can no longer run since its nonce is now used)
 	account.promoted.pop()
 
 	// update the account nonce -> *tx map
-	account.nonceToTx.remove(tx)
+	account.nonceToTx.remove(head)
 
 	// successfully popping an account resets its demotions count to 0
 	account.resetDemotions()
 
 	// update state
-	p.gauge.decrease(slotsRequired(tx))
+	p.gauge.decrease(slotsRequired(head))
 
 	// update metrics
 	p.updatePending(-1)

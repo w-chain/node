@@ -61,6 +61,14 @@ func FetchBLSValidators(
 		return nil, err
 	}
 
+	// The two lists come from separate contract calls; indexing keys by the
+	// address position must never run past the end (audit X-L1). Every node
+	// reads the same state, so all of them return this same error.
+	if len(blsPublicKeys) != len(valAddrs) {
+		return nil, fmt.Errorf("staking contract returned %d validators but %d BLS keys",
+			len(valAddrs), len(blsPublicKeys))
+	}
+
 	blsValidators := validators.NewBLSValidatorSet()
 
 	for idx := range valAddrs {

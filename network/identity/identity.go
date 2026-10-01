@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
+	"time"
 
 	"github.com/w-chain-team/node/network/event"
 	"github.com/hashicorp/go-hclog"
@@ -174,6 +176,9 @@ func (i *IdentityService) disconnectFromPeer(peerID peer.ID, reason string) {
 	i.baseServer.DisconnectFromPeer(peerID, reason)
 }
 
+// helloTimeout bounds the identity handshake with a newly connected peer.
+var helloTimeout = 10 * time.Second
+
 // handleConnected handles new network connections (handshakes)
 func (i *IdentityService) handleConnected(peerID peer.ID, direction network.Direction) error {
 	clt, clientErr := i.baseServer.NewIdentityClient(peerID)
@@ -184,11 +189,21 @@ func (i *IdentityService) handleConnected(peerID peer.ID, direction network.Dire
 		)
 	}
 
+	// The handshake stream is one-shot: release it when done.
+	if closer, ok := clt.(io.Closer); ok {
+		defer closer.Close()
+	}
+
 	// Construct the response status
 	status := i.constructStatus(peerID)
 
-	// Initiate the handshake
-	resp, err := clt.Hello(context.Background(), status)
+	// Initiate the handshake. A peer that connects but never answers used to
+	// hold its pending slot forever; enough of them fill every inbound and
+	// outbound slot and cut the node off from the network (audit NET-H1).
+	ctx, cancel := context.WithTimeout(context.Background(), helloTimeout)
+	defer cancel()
+
+	resp, err := clt.Hello(ctx, status)
 	if err != nil {
 		return err
 	}

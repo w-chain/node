@@ -24,8 +24,19 @@ func (s *Server) NewIdentityClient(peerID peer.ID) (proto.IdentityClient, error)
 		return nil, err
 	}
 
-	// Identity protocol connections are temporary and not saved anywhere
-	return proto.NewIdentityClient(protoStream), nil
+	// Identity protocol connections are temporary and not saved anywhere;
+	// the caller closes them when the handshake ends.
+	return &identityClient{IdentityClient: proto.NewIdentityClient(protoStream), conn: protoStream}, nil
+}
+
+// identityClient is a one-shot identity client that owns its connection.
+type identityClient struct {
+	proto.IdentityClient
+	conn *rawGrpc.ClientConn
+}
+
+func (c *identityClient) Close() error {
+	return c.conn.Close()
 }
 
 // AddPeer adds a new peer to the networking server's peer list,

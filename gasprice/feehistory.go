@@ -9,13 +9,17 @@ import (
 )
 
 var (
-	ErrInvalidPercentile = errors.New("invalid percentile")
-	ErrBlockCount        = errors.New("blockCount must be greater than 0")
-	ErrBlockNotFound     = errors.New("could not find block")
+	ErrInvalidPercentile  = errors.New("invalid percentile")
+	ErrBlockCount         = errors.New("blockCount must be greater than 0")
+	ErrBlockNotFound      = errors.New("could not find block")
+	ErrTooManyPercentiles = errors.New("too many reward percentiles (max 100)")
 )
 
 const (
 	maxBlockRequest = 1024
+
+	// maxRewardPercentiles caps the reward percentiles one request may ask for.
+	maxRewardPercentiles = 100
 )
 
 type cacheKey struct {
@@ -58,6 +62,13 @@ func (g *GasHelper) FeeHistory(blockCount uint64, newestBlock uint64, rewardPerc
 
 	if blockCount > newestBlock {
 		blockCount = newestBlock
+	}
+
+	// Every block in the range gets one reward entry per percentile, so an
+	// uncapped list made one small request allocate gigabytes (audit RPC-H1).
+	// Same limit as geth.
+	if len(rewardPercentiles) > maxRewardPercentiles {
+		return &FeeHistoryReturn{0, nil, nil, nil}, ErrTooManyPercentiles
 	}
 
 	for i, p := range rewardPercentiles {

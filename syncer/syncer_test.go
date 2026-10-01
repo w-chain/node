@@ -592,7 +592,7 @@ func TestSync(t *testing.T) {
 				}
 			},
 			blocks:             blocks[:10],
-			progressionStart:   1,
+			progressionStart:   5, // the second peer continues after the 4 blocks already written
 			progressionHighest: 10,
 			err:                nil,
 		},
@@ -612,7 +612,10 @@ func TestSync(t *testing.T) {
 				syncer = NewTestSyncer(
 					nil,
 					&mockBlockchain{
-						headerHandler:               newSimpleHeaderHandler(latestBlockNumber),
+						// The head moves as blocks are written, like a real chain.
+						headerHandler: func() *types.Header {
+							return &types.Header{Number: latestBlockNumber}
+						},
 						verifyFinalizedBlockHandler: test.createVerifyFinalizedBlockHandler(),
 						writeFullBlockHandler: func(b *types.FullBlock) error {
 							syncedBlocks = append(syncedBlocks, b.Block)

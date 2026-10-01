@@ -24,11 +24,20 @@ type GrpcStream struct {
 	grpcServer *grpc.Server
 }
 
+// maxConcurrentStreamsPerConn bounds simultaneous RPC streams per peer
+// connection on the internal p2p protocols (identity, discovery, syncer).
+const maxConcurrentStreamsPerConn = 32
+
 func NewGrpcStream() *GrpcStream {
 	return &GrpcStream{
 		ctx:        context.Background(),
 		streamCh:   make(chan network.Stream),
-		grpcServer: grpc.NewServer(grpc.UnaryInterceptor(interceptor)),
+		grpcServer: grpc.NewServer(
+			grpc.UnaryInterceptor(interceptor),
+			// A peer could otherwise open unlimited RPC streams on one
+			// connection, each with its own handler goroutine (audit SYN-H1).
+			grpc.MaxConcurrentStreams(maxConcurrentStreamsPerConn),
+		),
 	}
 }
 

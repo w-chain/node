@@ -407,6 +407,11 @@ func (t *Transition) Commit() (Snapshot, types.Hash, error) {
 	return s2, types.BytesToHash(root), nil
 }
 
+// GasPool returns the gas still available in the block being built.
+func (t *Transition) GasPool() uint64 {
+	return t.gasPool
+}
+
 func (t *Transition) subGasPool(amount uint64) error {
 	if t.gasPool < amount {
 		return ErrBlockLimitReached

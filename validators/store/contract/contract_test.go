@@ -31,7 +31,8 @@ var (
 		MinValidatorCount: 0,
 		MaxValidatorCount: 10,
 	}
-	testBlockGasLimit uint64 = 10000000
+	// Same query budget getTransitionForQuery gives in production.
+	testBlockGasLimit uint64 = 2 * staking.QueryGasLimit
 )
 
 func newTestBLSKeyBytes() validators.BLSValidatorPublicKey {
@@ -345,7 +346,10 @@ func TestContractValidatorStoreGetValidators(t *testing.T) {
 			executor: &mockExecutor{
 				BeginTxnFn: func(hash types.Hash, head *types.Header, addr types.Address) (*state.Transition, error) {
 					assert.Equal(t, stateRoot, hash)
-					assert.Equal(t, header, head)
+					// The query runs on a copy of the header with its own gas budget.
+					assert.Equal(t, header.StateRoot, head.StateRoot)
+					assert.Equal(t, header.Number, head.Number)
+					assert.Equal(t, 2*staking.QueryGasLimit, head.GasLimit)
 					assert.Equal(t, types.ZeroAddress, addr)
 
 					return transitionForECDSAValidators, nil
@@ -371,7 +375,10 @@ func TestContractValidatorStoreGetValidators(t *testing.T) {
 			executor: &mockExecutor{
 				BeginTxnFn: func(hash types.Hash, head *types.Header, addr types.Address) (*state.Transition, error) {
 					assert.Equal(t, stateRoot, hash)
-					assert.Equal(t, header, head)
+					// The query runs on a copy of the header with its own gas budget.
+					assert.Equal(t, header.StateRoot, head.StateRoot)
+					assert.Equal(t, header.Number, head.Number)
+					assert.Equal(t, 2*staking.QueryGasLimit, head.GasLimit)
 					assert.Equal(t, types.ZeroAddress, addr)
 
 					return transitionForECDSAValidators, nil
@@ -399,7 +406,10 @@ func TestContractValidatorStoreGetValidators(t *testing.T) {
 			executor: &mockExecutor{
 				BeginTxnFn: func(hash types.Hash, head *types.Header, addr types.Address) (*state.Transition, error) {
 					assert.Equal(t, stateRoot, hash)
-					assert.Equal(t, header, head)
+					// The query runs on a copy of the header with its own gas budget.
+					assert.Equal(t, header.StateRoot, head.StateRoot)
+					assert.Equal(t, header.Number, head.Number)
+					assert.Equal(t, 2*staking.QueryGasLimit, head.GasLimit)
 					assert.Equal(t, types.ZeroAddress, addr)
 
 					return transitionForBLSValidators, nil

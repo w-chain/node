@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/w-chain-team/node/contracts/staking"
 	"github.com/w-chain-team/node/state"
 	"github.com/w-chain-team/node/types"
 	"github.com/w-chain-team/node/validators"
@@ -99,7 +100,13 @@ func (s *ContractValidatorStore) getTransitionForQuery(height uint64) (*state.Tr
 		return nil, fmt.Errorf("header not found at %d", height)
 	}
 
-	return s.executor.BeginTxn(header.StateRoot, header, types.ZeroAddress)
+	// The query is a local read, not part of any block: run it in its own gas
+	// budget so the block gas limit (20M on mainnet) never caps it. Each view
+	// call reserves QueryGasLimit from this pool and returns the unused part.
+	queryHeader := header.Copy()
+	queryHeader.GasLimit = 2 * staking.QueryGasLimit
+
+	return s.executor.BeginTxn(header.StateRoot, queryHeader, types.ZeroAddress)
 }
 
 // loadCachedValidatorSet loads validators from validatorSetCache

@@ -9,6 +9,8 @@ import (
 	"github.com/w-chain-team/node/types"
 	"github.com/armon/go-metrics"
 	"github.com/golang/protobuf/ptypes/empty"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 var (
@@ -52,11 +54,26 @@ func (s *syncPeerService) setupGRPCServer() {
 	s.network.RegisterProtocol(syncerProto, s.stream)
 }
 
+// maxConcurrentGetBlocks bounds block streams this node serves at once.
+const maxConcurrentGetBlocks = 32
+
+var getBlocksSlots = make(chan struct{}, maxConcurrentGetBlocks)
+
 // GetBlocks is a gRPC endpoint to return blocks from the specific height via stream
 func (s *syncPeerService) GetBlocks(
 	req *proto.GetBlocksRequest,
 	stream proto.SyncPeer_GetBlocksServer,
 ) error {
+	// Each GetBlocks stream walks the chain from its start block on its own
+	// goroutine. Unbounded, peers could open thousands and exhaust memory
+	// (audit SYN-H1). When all slots are busy, the requester syncs elsewhere.
+	select {
+	case getBlocksSlots <- struct{}{}:
+		defer func() { <-getBlocksSlots }()
+	default:
+		return status.Error(codes.ResourceExhausted, "too many concurrent block streams")
+	}
+
 	// from to latest
 	for i := req.From; i <= s.blockchain.Header().Number; i++ {
 		block, ok := s.blockchain.GetBlockByNumber(i, true)

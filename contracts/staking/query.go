@@ -24,8 +24,12 @@ var (
 	// staking contract address
 	AddrStakingContract = types.StringToAddress("fAc510D5dB8cadfF323D4b979D898dc38F3FB6dF")
 
-	// Gas limit used when querying the validator set
-	queryGasLimit uint64 = 1000000
+	// QueryGasLimit is the gas each validator-set view call may use. At 1M,
+	// validatorBLSPublicKeys() ran out of gas at ~150 validators (the contract
+	// allows 499), and every node would then fail the next epoch's set: a
+	// permanent halt (audit IB-H1). 50M covers 499 validators with a wide
+	// margin. Callers must give the query its own gas budget, not the block's.
+	QueryGasLimit uint64 = 50_000_000
 
 	ErrMethodNotFoundInABI = errors.New("method not found in ABI")
 	ErrFailedTypeAssertion = errors.New("failed type assertion")
@@ -78,7 +82,7 @@ func createCallViewTx(
 		To:       &contractAddress,
 		Input:    methodID,
 		Nonce:    nonce,
-		Gas:      queryGasLimit,
+		Gas:      QueryGasLimit,
 		Value:    big.NewInt(0),
 		GasPrice: big.NewInt(0),
 	}

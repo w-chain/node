@@ -309,6 +309,8 @@ type txExeResult struct {
 
 type transitionInterface interface {
 	Write(txn *types.Transaction) error
+	// GasPool is the gas still available in the block being built.
+	GasPool() uint64
 }
 
 func (i *backendIBFT) writeTransactions(
@@ -396,8 +398,16 @@ func (i *backendIBFT) writeTransaction(
 
 	if err := transition.Write(tx); err != nil {
 		if _, ok := err.(*state.GasLimitReachedTransitionApplicationError); ok { //nolint:errorlint
-			// stop processing
-			return nil, false
+			// This tx does not fit in the gas left, but a smaller one may.
+			// Stopping here let one account holding a high-priced tx with a
+			// near-block-sized gas limit keep every block almost empty
+			// (audit TP-H2). Skip its account for this block (Peek already
+			// took it off the queue) and stop only when no tx can fit.
+			if transition.GasPool() < state.TxGas {
+				return nil, false
+			}
+
+			return &txExeResult{tx, skip}, true
 		} else if appErr, ok := err.(*state.TransitionApplicationError); ok && appErr.IsRecoverable { //nolint:errorlint
 			i.txpool.Demote(tx)
 
