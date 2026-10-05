@@ -253,6 +253,11 @@ func (i *backendIBFT) buildBlock(parent *types.Header) (*types.Block, error) {
 	header.StateRoot = root
 	header.GasUsed = transition.TotalGas()
 
+	// From WChainV110 the header carries the logs bloom (audit BI-1).
+	if i.isWChainV110(header.Number) {
+		header.LogsBloom = types.CreateBloom(transition.Receipts())
+	}
+
 	// build the block
 	block := consensus.BuildBlock(consensus.BuildBlockParams{
 		Header:   header,

@@ -404,6 +404,12 @@ func (i *backendIBFT) verifyHeaderImpl(
 		}
 	}
 
+	if i.isWChainV110(header.Number) {
+		if err := verifyV110Header(header); err != nil {
+			return err
+		}
+	}
+
 	if i.isWChainV109(header.Number) {
 		if err := verifyV109Header(header); err != nil {
 			return err
@@ -674,24 +680,24 @@ func (i *backendIBFT) verifyParentCommittedSeals(
 		return err
 	}
 
-	parentHash, err := i.calculateProposalHash(
-		parentSigner,
-		parentHeader,
-		parentExtra.RoundNumber,
-	)
-	if err != nil {
-		return err
+	verifyAt := func(round *uint64) error {
+		parentHash, err := i.calculateProposalHash(parentSigner, parentHeader, round)
+		if err != nil {
+			return err
+		}
+
+		// if shouldVerifyParentCommittedSeals is false, skip the verification
+		// when header doesn't have Parent Committed Seals (Backward Compatibility)
+		return parentSigner.VerifyParentCommittedSeals(
+			parentHash,
+			header,
+			parentValidators,
+			i.quorumSize(parent.Number)(parentValidators),
+			shouldVerifyParentCommittedSeals,
+		)
 	}
 
-	// if shouldVerifyParentCommittedSeals is false, skip the verification
-	// when header doesn't have Parent Committed Seals (Backward Compatibility)
-	return parentSigner.VerifyParentCommittedSeals(
-		parentHash,
-		header,
-		parentValidators,
-		i.quorumSize(parent.Number)(parentValidators),
-		shouldVerifyParentCommittedSeals,
-	)
+	return verifyParentSealsAtAnyRound(parentExtra.RoundNumber, i.isWChainV110(header.Number), verifyAt)
 }
 
 // getModulesFromForkManager is a helper function to get all modules from ForkManager

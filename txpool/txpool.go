@@ -818,7 +818,7 @@ func (p *TxPool) validateTx(tx *types.Transaction) error {
 	}
 
 	// Make sure the transaction has more gas than the basic transaction fee
-	intrinsicGas, err := state.TransactionGasCost(tx, forks.Homestead, forks.Istanbul)
+	intrinsicGas, err := state.TransactionGasCost(tx, forks.Homestead, forks.Istanbul, forks.WChainV110)
 	if err != nil {
 		metrics.IncrCounter([]string{txPoolMetrics, "invalid_intrinsic_gas_tx"}, 1)
 

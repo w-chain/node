@@ -120,6 +120,17 @@ func (p *Precompiled) CanRun(c *runtime.Contract, _ runtime.Host, config *chain.
 		return config.Istanbul
 	}
 
+	// The native transfer and BLS aggregate precompiles serve PolyBFT bridges
+	// and have never been called on W Chain. The BLS one let a call buy
+	// seconds of key decoding for little gas, by pointing many ABI offsets at
+	// one key (audit PS-C1). From WChainV110 both addresses are plain empty
+	// accounts.
+	if config.WChainV110 &&
+		(c.CodeAddress == contracts.NativeTransferPrecompile ||
+			c.CodeAddress == contracts.BLSAggSigsVerificationPrecompile) {
+		return false
+	}
+
 	return true
 }
 

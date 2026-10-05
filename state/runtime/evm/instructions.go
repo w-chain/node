@@ -304,6 +304,14 @@ func opSgt(c *state) {
 }
 
 func opSignExtension(c *state) {
+	// SIGNEXTEND takes two items. The dispatch table asks for one, so before
+	// WChainV110 it ran with an empty second operand (audit EVM-L1).
+	if c.config != nil && c.config.WChainV110 && !c.stackAtLeast(2) {
+		c.exit(&runtime.StackUnderflowError{StackLen: c.sp, Required: 2})
+
+		return
+	}
+
 	ext := c.pop()
 	x := c.top()
 
@@ -826,6 +834,18 @@ func opReturnDataCopy(c *state) {
 		c.exit(errReturnDataOutOfBounds)
 
 		return
+	}
+
+	// From WChainV110 the return data bounds are checked first, as the spec
+	// says: RETURNDATACOPY of 0 bytes at an offset past the data fails
+	// (audit EVM-L1).
+	if c.config.WChainV110 {
+		end := new(big.Int).Add(dataOffset, length)
+		if !end.IsUint64() || uint64(len(c.returnData)) < end.Uint64() {
+			c.exit(errReturnDataOutOfBounds)
+
+			return
+		}
 	}
 
 	// if length is 0, return immediately since no need for the data copying nor memory allocation
@@ -1363,6 +1383,21 @@ func (c *state) buildCreateContract(op OpCode) (*runtime.Contract, error) {
 	// Consume memory resize gas (TODO, change with get2) (to be fixed in EVM-528) //nolint:godox
 	if !c.consumeGas(gasCost) {
 		return nil, nil
+	}
+
+	// EIP-3860 from WChainV110: init code is limited and paid per word, as
+	// each CREATE analyses it again (audit EVM-H1).
+	if c.config.WChainV110 {
+		size := length.Uint64()
+		if size > maxInitCodeSize {
+			c.exit(errMaxInitCodeSize)
+
+			return nil, nil
+		}
+
+		if !c.consumeGas(((size + 31) / 32) * initCodeWordGas) {
+			return nil, nil
+		}
 	}
 
 	if hasTransfer {

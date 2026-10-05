@@ -16,6 +16,7 @@ type modExp struct {
 
 var (
 	big1      = big.NewInt(1)
+	big2      = big.NewInt(2)
 	big3      = big.NewInt(3)
 	big7      = big.NewInt(7)
 	big4      = big.NewInt(4)
@@ -120,6 +121,10 @@ func (m *modExp) gas(input []byte, config *chain.ForksInTime) uint64 {
 		gasCost.Set(baseLen)
 	}
 
+	if config != nil && config.WChainV110 {
+		return modExpGasEIP7883(gasCost, expLen, expHead)
+	}
+
 	if config != nil && config.WChainV109 {
 		return modExpGasEIP2565(gasCost, adjustedExponentLength(expLen, expHead))
 	}
@@ -166,6 +171,50 @@ func modExpGasEIP2565(maxLen, adjExpLen *big.Int) uint64 {
 
 	if gas.Uint64() < 200 {
 		return 200
+	}
+
+	return gas.Uint64()
+}
+
+// modExpGasEIP7883 prices modexp as in EIP-7883 (and geth's Osaka rules),
+// used from WChainV110. Under EIP-2565 a small modulus with a long
+// zero-padded exponent still cost 8-10x more time per gas than ecrecover
+// (audit PS-M1): EIP-7883 has a 500 gas minimum, a 16 gas floor on the
+// multiplication cost, no division by 3, and 16 (not 8) per exponent byte
+// beyond the first 32.
+func modExpGasEIP7883(maxLen, expLen, expHead *big.Int) uint64 {
+	// multiplication complexity: 16 up to 32 bytes, else 2 * ceil(len/8)^2
+	mult := new(big.Int).SetUint64(16)
+	if maxLen.Cmp(big32) > 0 {
+		words := new(big.Int).Add(maxLen, big7)
+		words.Div(words, big8)
+		mult.Mul(words, words)
+		mult.Mul(mult, big2)
+	}
+
+	// iteration count: 16 per exponent byte beyond 32, plus the highest set
+	// bit of the first 32 bytes, at least 1
+	iterations := new(big.Int)
+	if expLen.Cmp(big32) > 0 {
+		iterations.Sub(expLen, big32)
+		iterations.Mul(iterations, big16)
+	}
+
+	if bitLen := expHead.BitLen(); bitLen > 0 {
+		iterations.Add(iterations, big.NewInt(int64(bitLen-1)))
+	}
+
+	if iterations.Cmp(big1) < 0 {
+		iterations.Set(big1)
+	}
+
+	gas := mult.Mul(mult, iterations)
+	if !gas.IsUint64() {
+		return math.MaxUint64
+	}
+
+	if gas.Uint64() < 500 {
+		return 500
 	}
 
 	return gas.Uint64()

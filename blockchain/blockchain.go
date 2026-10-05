@@ -39,6 +39,7 @@ var (
 	ErrInvalidStateRoot     = errors.New("invalid block state root")
 	ErrInvalidGasUsed       = errors.New("invalid block gas used")
 	ErrInvalidReceiptsRoot  = errors.New("invalid block receipts root")
+	ErrInvalidLogsBloom     = errors.New("invalid block logs bloom")
 )
 
 // Blockchain is a blockchain reference
@@ -782,6 +783,19 @@ func (b *Blockchain) verifyBlockBody(block *types.Block) ([]*types.Receipt, erro
 		return nil, fmt.Errorf("unable to verify block execution result, %w", err)
 	}
 
+	// From WChainV110 the header carries the logs bloom of its receipts
+	// (audit BI-1). Before, it was always empty and never checked, so
+	// clients that filter blocks by bloom missed every event.
+	if b.config.Params.Forks.IsActive(chain.WChainV110, block.Number()) &&
+		types.CreateBloom(blockResult.Receipts) != block.Header.LogsBloom {
+		return nil, ErrInvalidLogsBloom
+	}
+
+	// Cache the receipts only once the block is known to be valid; caching
+	// them before let an invalid block with a valid header hash serve its
+	// receipts (audit BI-H1).
+	b.receiptsCache.Add(block.Header.Hash, blockResult.Receipts)
+
 	return blockResult.Receipts, nil
 }
 
@@ -840,9 +854,6 @@ func (b *Blockchain) executeBlockTransactions(block *types.Block) (*BlockResult,
 	if err != nil {
 		return nil, fmt.Errorf("failed to commit the state changes: %w", err)
 	}
-
-	// Append the receipts to the receipts cache
-	b.receiptsCache.Add(header.Hash, txn.Receipts())
 
 	return &BlockResult{
 		Root:     root,
@@ -1437,9 +1448,22 @@ func (b *Blockchain) CalculateBaseFee(parent *types.Header) uint64 {
 		return chain.GenesisBaseFee
 	}
 
+	forks := b.config.Params.Forks
+
+	// Before WChainV108 nothing checks a block's base fee, and it is not part
+	// of the block hash, so a peer could serve the last pre-fork block with a
+	// different one; checking the first fork block against it would then
+	// stall that node for good (audit BI-H1). When WChainV110 starts together
+	// with WChainV108 (mainnet), the first fork block takes the minimum base
+	// fee instead of anything derived from its parent.
+	if forks.IsActive(chain.WChainV108, parent.Number+1) && !forks.IsActive(chain.WChainV108, parent.Number) &&
+		forks.IsActive(chain.WChainV110, parent.Number+1) {
+		return chain.MinGasPrice
+	}
+
 	parentGasTarget := parent.GasLimit / b.config.Genesis.BaseFeeEM
 
-	if b.config.Params.Forks.IsActive(chain.WChainV108, parent.Number+1) {
+	if forks.IsActive(chain.WChainV108, parent.Number+1) {
 		return calcBaseFeeBig(parent, parentGasTarget, b.config.Genesis.BaseFeeChangeDenom)
 	}
 

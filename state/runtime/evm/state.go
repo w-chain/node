@@ -44,6 +44,14 @@ var (
 	errInvalidJump           = errors.New("invalid jump destination")
 	errOpCodeNotFound        = errors.New("opcode not found")
 	errReturnDataOutOfBounds = errors.New("return data out of bounds")
+	errMaxInitCodeSize       = errors.New("max initcode size exceeded")
+)
+
+const (
+	// maxInitCodeSize and initCodeWordGas are the EIP-3860 limit and price,
+	// from WChainV110 (same values as state.MaxInitCodeSize/InitCodeWordGas).
+	maxInitCodeSize        = 49152
+	initCodeWordGas uint64 = 2
 )
 
 // Instructions is the code of instructions
@@ -295,6 +303,12 @@ func (c *state) Len() int {
 // throws error if the given offset and size are negative
 // consumes gas if memory needs to be expanded
 func (c *state) allocateMemory(offset, size *big.Int) bool {
+	// A zero-size access touches no memory, whatever its offset. Before
+	// WChainV110 an offset of 2^64 or more failed it (audit EVM-L1).
+	if c.config != nil && c.config.WChainV110 && size.Sign() == 0 {
+		return true
+	}
+
 	if !offset.IsUint64() || !size.IsUint64() {
 		c.exit(errReturnDataOutOfBounds)
 

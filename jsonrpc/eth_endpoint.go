@@ -586,7 +586,7 @@ func (e *Eth) EstimateGas(arg *txnArgs, rawNum *BlockNumber) (interface{}, error
 	// transfers to Safes / WETH-style contracts that ran out of gas and lost
 	// the fee (audit RPC-M3).
 	if transaction.IsValueTransfer() && !e.hasCode(header.StateRoot, *transaction.To) {
-		gasCost, err := state.TransactionGasCost(transaction, forksInTime.Homestead, forksInTime.Istanbul)
+		gasCost, err := state.TransactionGasCost(transaction, forksInTime.Homestead, forksInTime.Istanbul, forksInTime.WChainV110)
 		if err != nil {
 			return nil, err
 		}

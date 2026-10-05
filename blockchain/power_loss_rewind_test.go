@@ -148,16 +148,22 @@ type plNode struct {
 func plOpen(t *testing.T, dir string, genesis *chain.Genesis) *plNode {
 	t.Helper()
 
+	return plOpenParams(t, dir, genesis, plParams())
+}
+
+func plOpenParams(t *testing.T, dir string, genesis *chain.Genesis, params *chain.Params) *plNode {
+	t.Helper()
+
 	trie, err := itrie.NewLevelDBStorage(filepath.Join(dir, "trie"), hclog.NewNullLogger())
 	require.NoError(t, err)
 
 	db, err := leveldb.NewLevelDBStorage(filepath.Join(dir, "blockchain"), hclog.NewNullLogger())
 	require.NoError(t, err)
 
-	ex := state.NewExecutor(plParams(), itrie.NewState(trie), hclog.NewNullLogger())
+	ex := state.NewExecutor(params, itrie.NewState(trie), hclog.NewNullLogger())
 
 	b, err := NewBlockchain(hclog.NewNullLogger(), db,
-		&chain.Chain{Genesis: genesis, Params: plParams()}, &MockVerifier{}, ex, &mockSigner{})
+		&chain.Chain{Genesis: genesis, Params: params}, &MockVerifier{}, ex, &mockSigner{})
 	require.NoError(t, err)
 
 	ex.GetHash = b.GetHashHelper

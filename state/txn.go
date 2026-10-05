@@ -37,6 +37,15 @@ type Txn struct {
 	txn       *iradix.Txn
 	codeCache *lru.Cache
 
+	// v110 turns on the WChainV110 rules: SSTORE's original value is the one
+	// at the start of the transaction, the refund counter never goes below
+	// zero, and the code cache is keyed by code hash.
+	v110 bool
+
+	// txStart is the state at the start of the current transaction, for the
+	// SSTORE original value from WChainV110.
+	txStart *iradix.Tree
+
 	// dirty holds the accounts written since the last CleanDeleteObjects.
 	// Only they can have become empty or self-destructed, so cleaning checks
 	// them instead of walking every account touched so far in the block,
@@ -424,17 +433,27 @@ func (txn *Txn) GetCode(addr types.Address) []byte {
 	if object.DirtyCode {
 		return object.Code
 	}
+	codeHash := types.BytesToHash(object.Account.CodeHash)
+
+	// Keyed by address, the cache kept a self-destructed contract's code for
+	// the rest of the block, so a revived address ran the dead code (audit
+	// EVM-M2). From WChainV110 it is keyed by code hash.
+	var cacheKey interface{} = addr
+	if txn.v110 {
+		cacheKey = codeHash
+	}
+
 	//nolint:godox
 	// TODO; Should we move this to state? (to be fixed in EVM-527)
-	v, ok := txn.codeCache.Get(addr)
+	v, ok := txn.codeCache.Get(cacheKey)
 
 	if ok {
 		//nolint:forcetypeassert
 		return v.([]byte)
 	}
 
-	code, _ := txn.snapshot.GetCode(types.BytesToHash(object.Account.CodeHash))
-	txn.codeCache.Add(addr, code)
+	code, _ := txn.snapshot.GetCode(codeHash)
+	txn.codeCache.Add(cacheKey, code)
 
 	return code
 }
@@ -485,7 +504,17 @@ func (txn *Txn) AddRefund(gas uint64) {
 }
 
 func (txn *Txn) SubRefund(gas uint64) {
-	refund := txn.GetRefund() - gas
+	current := txn.GetRefund()
+
+	// From WChainV110 the counter stops at zero instead of wrapping around to
+	// a huge refund (audit EVM-M1).
+	if txn.v110 && gas > current {
+		txn.txn.Insert(refundIndex, uint64(0))
+
+		return
+	}
+
+	refund := current - gas
 	txn.txn.Insert(refundIndex, refund)
 }
 
@@ -510,14 +539,65 @@ func (txn *Txn) GetRefund() uint64 {
 	return data.(uint64)
 }
 
-// GetCommittedState returns the state of the address in the trie
+// GetCommittedState returns the storage value SSTORE treats as original.
+// Before WChainV110 that is the value at the start of the block. The refund
+// counter starts again with every transaction, so a slot cleared by an earlier
+// transaction of the block subtracted a refund it never added, wrapping the
+// counter (audit EVM-M1). From WChainV110 it is the value at the start of the
+// transaction, as in Ethereum.
 func (txn *Txn) GetCommittedState(addr types.Address, key types.Hash) types.Hash {
+	if txn.v110 && txn.txStart != nil {
+		return txn.storageAt(txn.txStart, addr, key)
+	}
+
 	obj, ok := txn.getStateObject(addr)
 	if !ok {
 		return types.Hash{}
 	}
 
 	return txn.snapshot.GetStorage(addr, obj.Account.Root, key)
+}
+
+// storageAt reads a storage slot as it was in tree, an earlier copy of the
+// block's state.
+func (txn *Txn) storageAt(tree *iradix.Tree, addr types.Address, key types.Hash) types.Hash {
+	val, ok := tree.Get(addr.Bytes())
+	if !ok {
+		account, err := txn.snapshot.GetAccount(addr)
+		if err != nil || account == nil {
+			return types.Hash{}
+		}
+
+		return txn.snapshot.GetStorage(addr, account.Root, key)
+	}
+
+	obj := val.(*StateObject) //nolint:forcetypeassert
+	if obj.Deleted {
+		return types.Hash{}
+	}
+
+	if obj.Txn != nil {
+		if v, ok := obj.Txn.Get(key.Bytes()); ok {
+			if v == nil {
+				return types.Hash{}
+			}
+
+			return types.BytesToHash(v.([]byte)) //nolint:forcetypeassert
+		}
+	}
+
+	if obj.withFakeStorage {
+		return types.Hash{}
+	}
+
+	return txn.snapshot.GetStorage(addr, obj.Account.Root, key)
+}
+
+// beginTx records the state a transaction starts from.
+func (txn *Txn) beginTx(id int) {
+	if txn.v110 && id >= 0 && id < len(txn.snapshots) {
+		txn.txStart = txn.snapshots[id]
+	}
 }
 
 // SetFullStorage is used to replace the full state of the address.

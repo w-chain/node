@@ -137,6 +137,16 @@ const (
 	// header timestamp. It is a separate key because WChainV108 is already
 	// active on testnet; on a chain crossing both fresh, both may use one block.
 	WChainV109 = "wchainv109"
+
+	// WChainV110 switches on the third round of v1.0.8 rule fixes: the
+	// PolyBFT-only precompiles are off, EIP-3860 init code limits, EIP-7883
+	// modexp pricing, per-transaction original storage values for SSTORE, a
+	// code cache keyed by code hash, spec-correct edge cases in SIGNEXTEND and
+	// memory copies, base fee, nonce and mix hash in the block hash, the logs
+	// bloom in the header, and parent seals accepted at any round they were
+	// committed in. On mainnet it activates at the same block as WChainV108
+	// and WChainV109.
+	WChainV110 = "wchainv110"
 )
 
 // Forks is map which contains all forks and their starting blocks from genesis
@@ -176,6 +186,7 @@ func (f *Forks) At(block uint64) ForksInTime {
 		TxHashWithType:      f.IsActive(TxHashWithType, block),
 		LondonFix:           f.IsActive(LondonFix, block),
 		WChainV109:          f.IsActive(WChainV109, block),
+		WChainV110:          f.IsActive(WChainV110, block),
 	}
 }
 
@@ -229,7 +240,8 @@ type ForksInTime struct {
 	QuorumCalcAlignment,
 	TxHashWithType,
 	LondonFix,
-	WChainV109 bool
+	WChainV109,
+	WChainV110 bool
 }
 
 // AllForksEnabled should contain all supported forks by current edge version
@@ -248,4 +260,5 @@ var AllForksEnabled = &Forks{
 	LondonFix:           NewFork(0),
 	WChainV108:          NewFork(0),
 	WChainV109:          NewFork(0),
+	WChainV110:          NewFork(0),
 }

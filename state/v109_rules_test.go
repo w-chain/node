@@ -36,6 +36,7 @@ func newV109Env(t *testing.T, alloc map[types.Address]*chain.GenesisAccount) *v1
 
 	forks := chain.AllForksEnabled.Copy()
 	(*forks)[chain.WChainV109] = chain.NewFork(v109Block)
+	forks.RemoveFork(chain.WChainV110)
 
 	params := &chain.Params{ChainID: 171717, Forks: forks, BurnContract: map[uint64]types.Address{0: v109Burn}}
 	st := itrie.NewState(itrie.NewMemoryStorage())

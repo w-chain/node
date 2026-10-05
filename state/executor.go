@@ -25,6 +25,11 @@ const (
 
 	TxGas                 uint64 = 21000 // Per transaction not creating a contract
 	TxGasContractCreation uint64 = 53000 // Per transaction that creates a contract
+
+	// MaxInitCodeSize and InitCodeWordGas are the EIP-3860 limit and price for
+	// contract init code, from WChainV110.
+	MaxInitCodeSize        = 2 * SpuriousDragonMaxCodeSize
+	InitCodeWordGas uint64 = 2
 )
 
 // GetHashByNumber returns the hash function of a block number
@@ -190,6 +195,7 @@ func (e *Executor) BeginTxn(
 	}
 
 	newTxn := NewTxn(auxSnap2)
+	newTxn.v110 = forkConfig.WChainV110
 
 	txCtx := runtime.TxContext{
 		Coinbase:     coinbaseReceiver,
@@ -435,6 +441,8 @@ func (t *Transition) Apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 	s := t.state.Snapshot()
 	defer t.state.ReleaseSnapshot(s)
 
+	t.state.beginTx(s)
+
 	result, err := t.apply(msg)
 	if err != nil {
 		if revertErr := t.state.RevertToSnapshot(s); revertErr != nil {
@@ -510,6 +518,7 @@ var (
 	ErrBlockLimitReached     = errors.New("gas limit reached in the pool")
 	ErrIntrinsicGasOverflow  = errors.New("overflow in intrinsic gas calculation")
 	ErrNotEnoughIntrinsicGas = errors.New("not enough gas supplied for intrinsic gas costs")
+	ErrMaxInitCodeSize       = errors.New("max initcode size exceeded")
 
 	// ErrTipAboveFeeCap is a sanity error to ensure no one is able to specify a
 	// transaction with a tip higher than the total fee cap.
@@ -580,9 +589,16 @@ func (t *Transition) apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 	}
 
 	// 4. there is no overflow when calculating intrinsic gas
-	intrinsicGasCost, err := TransactionGasCost(msg, t.config.Homestead, t.config.Istanbul)
+	intrinsicGasCost, err := TransactionGasCost(msg, t.config.Homestead, t.config.Istanbul, t.config.WChainV110)
 	if err != nil {
 		return nil, NewTransitionApplicationError(err, false)
+	}
+
+	// EIP-3860: every CREATE re-analysed its init code for a flat price, so a
+	// transaction creating from multi-MB init code stalled the proposer
+	// (audit EVM-H1).
+	if t.config.WChainV110 && msg.IsContractCreation() && len(msg.Input) > MaxInitCodeSize {
+		return nil, NewTransitionApplicationError(ErrMaxInitCodeSize, false)
 	}
 
 	// the purchased gas is enough to cover intrinsic usage
@@ -627,6 +643,14 @@ func (t *Transition) apply(msg *types.Transaction) (*runtime.ExecutionResult, er
 	effectiveTip := GetLondonFixHandler(uint64(t.ctx.Number)).getEffectiveTip(
 		msg, gasPrice, t.ctx.BaseFee, t.config.London,
 	)
+
+	// A fee cap below the base fee gives a negative tip, which would take
+	// balance from the coinbase. Normal transactions are refused before that
+	// (WChainV109); state transactions skip those checks. From WChainV110 the
+	// tip never goes below zero (audit E3-L1).
+	if t.config.WChainV110 && effectiveTip.Sign() < 0 {
+		effectiveTip = new(big.Int)
+	}
 
 	// Pay the coinbase fee as a miner reward using the calculated effective tip.
 	coinbaseFee := new(big.Int).Mul(new(big.Int).SetUint64(result.GasUsed), effectiveTip)
@@ -1094,7 +1118,9 @@ func (t *Transition) GetRefund() uint64 {
 	return t.state.GetRefund()
 }
 
-func TransactionGasCost(msg *types.Transaction, isHomestead, isIstanbul bool) (uint64, error) {
+// TransactionGasCost returns the intrinsic gas of msg. From WChainV110
+// (isV110) contract creation also pays EIP-3860 gas per init code word.
+func TransactionGasCost(msg *types.Transaction, isHomestead, isIstanbul, isV110 bool) (uint64, error) {
 	cost := uint64(0)
 
 	// Contract creation is only paid on the homestead fork
@@ -1132,6 +1158,15 @@ func TransactionGasCost(msg *types.Transaction, isHomestead, isIstanbul bool) (u
 		}
 
 		cost += zeros * 4
+
+		if isV110 && msg.IsContractCreation() {
+			words := (uint64(len(payload)) + 31) / 32
+			if (math.MaxUint64-cost)/InitCodeWordGas < words {
+				return 0, ErrIntrinsicGasOverflow
+			}
+
+			cost += words * InitCodeWordGas
+		}
 	}
 
 	return cost, nil
