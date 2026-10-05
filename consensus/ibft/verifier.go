@@ -135,7 +135,7 @@ func (i *backendIBFT) IsValidValidator(msg *protoIBFT.Message) bool {
 		return false
 	}
 
-	msgNoSig, err := msg.PayloadNoSig()
+	msgNoSig, err := i.signingPayload(msg)
 	if err != nil {
 		return false
 	}

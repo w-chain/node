@@ -22,7 +22,7 @@ func TestBlockByteBudget(t *testing.T) {
 	t.Parallel()
 
 	for _, n := range []int{0, 1, 4, 6, 12, 20, 40, 49, 50, 63, 200} {
-		budget := blockByteBudget(n)
+		budget := blockByteBudget(n, false)
 
 		require.LessOrEqual(t, budget, uint64(maxBlockBytes), "n=%d: never above the hard cap", n)
 		require.GreaterOrEqual(t, budget, uint64(minBlockBytes), "n=%d: never below the floor", n)
@@ -31,14 +31,14 @@ func TestBlockByteBudget(t *testing.T) {
 	// Up to maxGuaranteedValidators the (1+2N) amplification of one failed
 	// prepared round stays under the gossip limit.
 	for n := 1; n <= maxGuaranteedValidators; n++ {
-		worst := blockByteBudget(n)*uint64(1+2*n) + blockBytesMargin
+		worst := blockByteBudget(n, false)*uint64(1+2*n) + blockBytesMargin
 		require.LessOrEqual(t, worst, uint64(network.MaxGossipMessageSize),
 			"n=%d: one failed prepared round must still fit the gossip limit", n)
 	}
 
-	require.Equal(t, uint64(maxBlockBytes), blockByteBudget(4), "small sets hit the hard cap")
-	require.Equal(t, uint64(minBlockBytes), blockByteBudget(500), "huge sets hit the floor")
-	require.Less(t, blockByteBudget(12), blockByteBudget(6), "more validators, smaller blocks")
+	require.Equal(t, uint64(maxBlockBytes), blockByteBudget(4, false), "small sets hit the hard cap")
+	require.Equal(t, uint64(minBlockBytes), blockByteBudget(500, false), "huge sets hit the floor")
+	require.Less(t, blockByteBudget(12, false), blockByteBudget(6, false), "more validators, smaller blocks")
 }
 
 // NET-C1: block building stops at the byte budget, skipping a transaction

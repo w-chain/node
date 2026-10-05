@@ -20,7 +20,16 @@ func (g *gossipTransport) Multicast(msg *proto.Message) error {
 	return g.topic.Publish(msg)
 }
 
+// dropOutgoingForTest lets local fault-injection builds (build tag
+// faultinject, see fault_inject.go) drop chosen outgoing consensus messages
+// to force failed rounds. It is always nil in release builds.
+var dropOutgoingForTest func(*proto.Message) bool
+
 func (i *backendIBFT) Multicast(msg *proto.Message) {
+	if dropOutgoingForTest != nil && dropOutgoingForTest(msg) {
+		return
+	}
+
 	if err := i.transport.Multicast(msg); err != nil {
 		i.logger.Error("fail to gossip", "err", err)
 	}

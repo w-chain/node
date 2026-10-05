@@ -1,13 +1,11 @@
 package ibft
 
 import (
-	"google.golang.org/protobuf/proto"
-
 	protoIBFT "github.com/0xPolygon/go-ibft/messages/proto"
 )
 
 func (i *backendIBFT) signMessage(msg *protoIBFT.Message) *protoIBFT.Message {
-	raw, err := proto.Marshal(msg)
+	raw, err := i.signingPayload(msg)
 	if err != nil {
 		return nil
 	}
@@ -33,6 +31,10 @@ func (i *backendIBFT) BuildPrePrepareMessage(
 	proposalHash, err := i.calculateProposalHashFromBlockBytes(rawProposal, &view.Round)
 	if err != nil {
 		return nil
+	}
+
+	if i.IsCompactRoundChange(view.Height) {
+		certificate = compactCertificate(certificate)
 	}
 
 	msg := &protoIBFT.Message{
@@ -94,6 +96,10 @@ func (i *backendIBFT) BuildRoundChangeMessage(
 	certificate *protoIBFT.PreparedCertificate,
 	view *protoIBFT.View,
 ) *protoIBFT.Message {
+	if i.IsCompactRoundChange(view.Height) {
+		certificate = compactPreparedCertificate(certificate)
+	}
+
 	msg := &protoIBFT.Message{
 		View: view,
 		From: i.ID(),

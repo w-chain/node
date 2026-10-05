@@ -227,7 +227,7 @@ func (i *backendIBFT) buildBlock(parent *types.Header) (*types.Block, error) {
 	// Bytes left for transactions once the header (with the validator list
 	// in its extra data) is accounted for.
 	txByteBudget := uint64(0)
-	if budget, headerBytes := blockByteBudget(m.validators.Len()), uint64(len(header.MarshalRLP())); budget > headerBytes {
+	if budget, headerBytes := blockByteBudget(m.validators.Len(), i.IsCompactRoundChange(header.Number)), uint64(len(header.MarshalRLP())); budget > headerBytes {
 		txByteBudget = budget - headerBytes
 	}
 

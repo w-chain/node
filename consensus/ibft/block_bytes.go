@@ -35,8 +35,16 @@ const (
 	maxGuaranteedValidators = ((network.MaxGossipMessageSize-blockBytesMargin)/minBlockBytes - 1) / 2
 )
 
+// compactBytesPerValidator bounds what one validator adds to the largest
+// compact consensus message: its stripped round change (sender, signature,
+// prepared claim) in a proposal's certificate, and its PREPARE in the one
+// full prepared certificate. Measured ~0.4 KB; 1 KB leaves room.
+const compactBytesPerValidator = 1 << 10
+
 // blockByteBudget is how many bytes of block RLP a proposer may build when
-// validatorCount validators take part.
+// validatorCount validators take part. compact is WChainV111: certificates no
+// longer copy the block, so the largest message is one block plus a small
+// part per validator.
 //
 // A proposal travels inside one gossip message, so the block must fit the
 // gossip limit. go-ibft also copies the prepared block into every round-change
@@ -44,12 +52,21 @@ const (
 // failed prepared round the message is about (1 + 2N) times the block. The
 // budget keeps that worst case under the limit for the live validator set, so
 // it needs no change as validators join (Node-as-a-Service).
-func blockByteBudget(validatorCount int) uint64 {
+func blockByteBudget(validatorCount int, compact bool) uint64 {
 	if validatorCount < 1 {
 		validatorCount = 1
 	}
 
-	budget := uint64(network.MaxGossipMessageSize-blockBytesMargin) / uint64(1+2*validatorCount)
+	var budget uint64
+
+	if compact {
+		overhead := uint64(blockBytesMargin) + uint64(validatorCount)*compactBytesPerValidator
+		if overhead < network.MaxGossipMessageSize {
+			budget = network.MaxGossipMessageSize - overhead
+		}
+	} else {
+		budget = uint64(network.MaxGossipMessageSize-blockBytesMargin) / uint64(1+2*validatorCount)
+	}
 
 	if budget > maxBlockBytes {
 		return maxBlockBytes

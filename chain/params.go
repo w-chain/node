@@ -147,6 +147,14 @@ const (
 	// committed in. On mainnet it activates at the same block as WChainV108
 	// and WChainV109.
 	WChainV110 = "wchainv110"
+
+	// WChainV111 switches consensus messages to compact round changes:
+	// PREPREPARE and ROUND_CHANGE messages are signed over hashes and rounds,
+	// so certificates carry no block copies and no nested certificates. Round
+	// change messages then stay small whatever the number of validators or
+	// failed rounds. On mainnet it activates at the same block as WChainV108,
+	// WChainV109 and WChainV110.
+	WChainV111 = "wchainv111"
 )
 
 // Forks is map which contains all forks and their starting blocks from genesis
@@ -261,4 +269,5 @@ var AllForksEnabled = &Forks{
 	WChainV108:          NewFork(0),
 	WChainV109:          NewFork(0),
 	WChainV110:          NewFork(0),
+	WChainV111:          NewFork(0),
 }
