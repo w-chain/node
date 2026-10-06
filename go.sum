@@ -715,6 +715,8 @@ github.com/w-chain/go-ibft v0.4.1-wchain.2 h1:RILLtdVh03xcfjD/cPBFHiw/ygB9FaU+e1
 github.com/w-chain/go-ibft v0.4.1-wchain.2/go.mod h1:0W1BnkhtXa2K59PzTPoQvbKOnI+G6QliXIHpQWNeiAM=
 github.com/w-chain/go-ibft v0.4.1-wchain.3 h1:qJlhjLehhFI82bRGtFZzH+CK5Bma6ldrZyXEkn7DCDQ=
 github.com/w-chain/go-ibft v0.4.1-wchain.3/go.mod h1:0W1BnkhtXa2K59PzTPoQvbKOnI+G6QliXIHpQWNeiAM=
+github.com/w-chain/go-ibft v0.4.1-wchain.4 h1:b1JE9fsTuUKEYUGHT3N3EQz6OwewXy1SRGMTrlJJLmQ=
+github.com/w-chain/go-ibft v0.4.1-wchain.4/go.mod h1:0W1BnkhtXa2K59PzTPoQvbKOnI+G6QliXIHpQWNeiAM=
 github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/yuin/goldmark v1.2.1/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/yuin/goldmark v1.3.5/go.mod h1:mwnBkeHKe2W/ZEtQ+71ViKU8L12m81fl3OWwC1Zlc8k=

@@ -114,7 +114,8 @@ func validatorsForMessage(
 // heights above head, dropped once the chain moves past them.
 type storedMessageBudget struct {
 	mu   sync.Mutex
-	used map[uint64]map[string]int // height -> sender -> bytes
+	used map[uint64]map[string]int      // height -> sender -> bytes
+	seen map[uint64]map[string]struct{} // height -> sender+signature already charged
 }
 
 // allow records a message about to be handed to go-ibft and reports whether
@@ -130,6 +131,53 @@ func (b *storedMessageBudget) allow(from []byte, height, head uint64, size int) 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	return b.charge(from, height, head, size)
+}
+
+// allowMessage is allow for one received message, charging each signed message
+// once. A copy with a signature already charged for this sender and height
+// passes free: go-ibft keeps the first copy with a given signature, so it costs
+// nothing, and charging it would let anyone who replays a validator's messages
+// use up that validator's budget and have its real votes dropped.
+func (b *storedMessageBudget) allowMessage(msg *proto.Message, head uint64) bool {
+	height := msg.View.Height
+	if height <= head || len(msg.Signature) == 0 {
+		return b.allow(msg.From, height, head, gproto.Size(msg))
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	for h := range b.seen {
+		if h <= head {
+			delete(b.seen, h)
+		}
+	}
+
+	key := string(msg.From) + string(msg.Signature)
+	if _, ok := b.seen[height][key]; ok {
+		return true
+	}
+
+	if !b.charge(msg.From, height, head, gproto.Size(msg)) {
+		return false
+	}
+
+	if b.seen == nil {
+		b.seen = make(map[uint64]map[string]struct{})
+	}
+
+	if b.seen[height] == nil {
+		b.seen[height] = make(map[string]struct{})
+	}
+
+	b.seen[height][key] = struct{}{}
+
+	return true
+}
+
+// charge is allow without the lock.
+func (b *storedMessageBudget) charge(from []byte, height, head uint64, size int) bool {
 	if b.used == nil {
 		b.used = make(map[uint64]map[string]int)
 	}

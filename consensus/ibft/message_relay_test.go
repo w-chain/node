@@ -90,3 +90,46 @@ func TestStoredMessageBudget(t *testing.T) {
 	// budget is freed.
 	require.True(t, b.allow(attacker, head+18, head+17, mib))
 }
+
+// Replaying a validator's own signed messages must not use up its budget:
+// otherwise any peer could have that validator's real votes dropped.
+func TestStoredMessageBudget_ReplaysAreFree(t *testing.T) {
+	t.Parallel()
+
+	const head = uint64(1000)
+
+	var b storedMessageBudget
+
+	msg := func(sig string, size int) *proto.Message {
+		return &proto.Message{
+			From: []byte("v"), View: &proto.View{Height: head + 1}, Type: proto.MessageType_ROUND_CHANGE,
+			Signature: []byte(sig),
+			Payload: &proto.Message_RoundChangeData{RoundChangeData: &proto.RoundChangeMessage{
+				LastPreparedProposal: &proto.Proposal{RawProposal: make([]byte, size)},
+			}},
+		}
+	}
+
+	// A 1 MiB round change replayed far past the budget...
+	for i := 0; i < 2*maxStoredBytesPerSender/(1<<20); i++ {
+		require.True(t, b.allowMessage(msg("rc", 1<<20), head), "replay %d", i)
+	}
+
+	// ...also with its unsigned parts changed (same signature)...
+	require.True(t, b.allowMessage(msg("rc", 2<<20), head))
+
+	// ...still leaves the validator's next real messages accepted.
+	require.True(t, b.allowMessage(msg("prepare", 200), head))
+	require.True(t, b.allowMessage(msg("commit", 200), head))
+
+	// Distinct signed messages are still charged and capped.
+	stored := 0
+	for i := 0; i < 200; i++ {
+		if b.allowMessage(msg(string(rune('a'+i%26))+string(rune(i)), 1<<20), head) {
+			stored++
+		}
+	}
+
+	require.Less(t, stored, 200)
+	require.LessOrEqual(t, stored, maxStoredBytesPerSender/(1<<20))
+}

@@ -25,6 +25,11 @@ func (g *gossipTransport) Multicast(msg *proto.Message) error {
 // to force failed rounds. It is always nil in release builds.
 var dropOutgoingForTest func(*proto.Message) bool
 
+// tamperOutgoingForTest lets local fault-injection builds also publish changed
+// copies of an outgoing message, as a peer re-gossiping it would. Always nil
+// in release builds.
+var tamperOutgoingForTest func(*proto.Message) []*proto.Message
+
 func (i *backendIBFT) Multicast(msg *proto.Message) {
 	if dropOutgoingForTest != nil && dropOutgoingForTest(msg) {
 		return
@@ -32,6 +37,12 @@ func (i *backendIBFT) Multicast(msg *proto.Message) {
 
 	if err := i.transport.Multicast(msg); err != nil {
 		i.logger.Error("fail to gossip", "err", err)
+	}
+
+	if tamperOutgoingForTest != nil {
+		for _, bad := range tamperOutgoingForTest(msg) {
+			_ = i.transport.Multicast(bad)
+		}
 	}
 }
 
@@ -79,7 +90,7 @@ func (i *backendIBFT) setupTransport() error {
 				return
 			}
 
-			if !i.storedMessages.allow(msg.From, msg.View.Height, head, gproto.Size(msg)) {
+			if !i.storedMessages.allowMessage(msg, head) {
 				i.logger.Debug("dropping consensus message: sender over its stored-message budget",
 					"addr", types.BytesToAddress(msg.From), "height", msg.View.Height)
 

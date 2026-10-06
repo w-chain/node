@@ -240,4 +240,4 @@ require (
 	gotest.tools/v3 v3.0.2 // indirect
 )
 
-replace github.com/0xPolygon/go-ibft => github.com/w-chain/go-ibft v0.4.1-wchain.3
+replace github.com/0xPolygon/go-ibft => github.com/w-chain/go-ibft v0.4.1-wchain.4
