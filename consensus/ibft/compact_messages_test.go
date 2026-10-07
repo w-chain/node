@@ -66,7 +66,7 @@ func signedRoundChange(t *testing.T, i *backendIBFT, addr types.Address, height,
 	t.Helper()
 
 	prepares := []*protoIBFT.Message{{
-		View: prepared.View, From: addr.Bytes(), Signature: []byte{1}, Type: protoIBFT.MessageType_PREPARE,
+		View: prepared.View, From: addr.Bytes(), Signature: canonicalTestSig(), Type: protoIBFT.MessageType_PREPARE,
 		Payload: &protoIBFT.Message_PrepareData{PrepareData: &protoIBFT.PrepareMessage{
 			ProposalHash: prepared.GetPreprepareData().ProposalHash,
 		}},

@@ -51,6 +51,9 @@ type Network interface {
 	NewProtoConnection(protocol string, peerID peer.ID) (*rawGrpc.ClientConn, error)
 	// NewTopic Creates New Topic for gossip
 	NewTopic(protoID string, obj proto.Message) (*network.Topic, error)
+	// RegisterTopicValidator checks every message of a topic before it is
+	// delivered or relayed
+	RegisterTopicValidator(protoID string, validate func(data []byte) bool) error
 	// IsConnected returns the node is connecting to the peer associated with the given ID
 	IsConnected(peerID peer.ID) bool
 	// SaveProtocolStream saves stream

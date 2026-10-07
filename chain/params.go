@@ -142,10 +142,12 @@ const (
 	// PolyBFT-only precompiles are off, EIP-3860 init code limits, EIP-7883
 	// modexp pricing, per-transaction original storage values for SSTORE, a
 	// code cache keyed by code hash, spec-correct edge cases in SIGNEXTEND and
-	// memory copies, base fee, nonce and mix hash in the block hash, the logs
-	// bloom in the header, and parent seals accepted at any round they were
-	// committed in. On mainnet it activates at the same block as WChainV108
-	// and WChainV109.
+	// memory copies, the header nonce required to be zero (the block hash is
+	// unchanged; the base fee is checked from WChainV108, and when both start
+	// at one block the fork block's base fee is the minimum gas price), the
+	// logs bloom in the header, and parent seals accepted at any round they
+	// were committed in. On mainnet it activates at the same block as
+	// WChainV108 and WChainV109.
 	WChainV110 = "wchainv110"
 
 	// WChainV111 switches consensus messages to compact round changes:

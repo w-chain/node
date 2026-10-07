@@ -20,6 +20,7 @@ package ibft
 import (
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"sync"
 	"time"
@@ -67,7 +68,18 @@ type fileObserver struct {
 	mu  sync.Mutex
 	f   *os.File
 	enc *json.Encoder
+
+	// seen holds the sender+signature of recorded messages by height. Signatures
+	// are canonical, so one key is one signed message: re-sent copies (replays,
+	// relayers' variants with unsigned parts changed) are not written again,
+	// which kept them from filling the disk.
+	seen    map[string]uint64
+	highest uint64
 }
+
+// observeDedupHeights is how far below the highest height seen records are
+// still deduplicated; the reader keeps a similar window.
+const observeDedupHeights = 64
 
 // NewFileObserver opens path for appending. Returns nil if path is empty, so
 // callers can wire it unconditionally.
@@ -81,7 +93,7 @@ func NewFileObserver(path string) (MessageObserver, func() error, error) {
 		return nil, nil, err
 	}
 
-	o := &fileObserver{f: f, enc: json.NewEncoder(f)}
+	o := &fileObserver{f: f, enc: json.NewEncoder(f), seen: map[string]uint64{}}
 
 	return o.observe, f.Close, nil
 }
@@ -90,6 +102,31 @@ func (o *fileObserver) observe(msg *proto.Message, from peer.ID) {
 	if msg == nil || msg.GetView() == nil {
 		return
 	}
+
+	height := msg.GetView().Height
+	key := string(msg.From) + string(msg.Signature)
+
+	o.mu.Lock()
+	if _, dup := o.seen[key]; dup {
+		o.mu.Unlock()
+
+		return
+	}
+
+	o.seen[key] = height
+
+	if height > o.highest {
+		o.highest = height
+
+		if o.highest > observeDedupHeights {
+			for k, h := range o.seen {
+				if h < o.highest-observeDedupHeights {
+					delete(o.seen, k)
+				}
+			}
+		}
+	}
+	o.mu.Unlock()
 
 	rec := ObservedMessage{
 		At:        time.Now().UTC(),
@@ -137,8 +174,13 @@ func proposalHash(msg *proto.Message) string {
 			return hex.EncodeToString(m.CommitData.ProposalHash)
 		}
 	case *proto.Message_RoundChangeData:
-		if m.RoundChangeData != nil && m.RoundChangeData.LastPreparedProposal != nil {
-			return hex.EncodeToString(m.RoundChangeData.LastPreparedProposal.RawProposal)
+		// What the round change signs is its claim: the prepared block's hash
+		// and round. The block itself is not signed from WChainV111, so using
+		// it let a relayer's copy look like a second, conflicting round change
+		// of an honest validator: a forged double-sign proof (audit review H1).
+		pm := m.RoundChangeData.GetLatestPreparedCertificate().GetProposalMessage()
+		if pm != nil && pm.GetView() != nil {
+			return fmt.Sprintf("%x@%d", pm.GetPreprepareData().GetProposalHash(), pm.GetView().Round)
 		}
 	}
 

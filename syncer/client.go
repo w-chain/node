@@ -17,6 +17,7 @@ import (
 	"github.com/armon/go-metrics"
 	"github.com/hashicorp/go-hclog"
 	"github.com/libp2p/go-libp2p/core/peer"
+	gproto "google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -200,6 +201,13 @@ func (m *syncPeerClient) startGossip() error {
 		return err
 	}
 
+	// Without a validator pubsub relayed anything on this topic, up to the
+	// 16 MiB gossip limit, to every peer before failing to decode it (audit
+	// review M2). A status is one block number.
+	if err := m.network.RegisterTopicValidator(statusTopicName, isValidStatusMessage); err != nil {
+		return err
+	}
+
 	if err := topic.Subscribe(m.handleStatusUpdate); err != nil {
 		return fmt.Errorf("unable to subscribe to gossip topic, %w", err)
 	}
@@ -207,6 +215,23 @@ func (m *syncPeerClient) startGossip() error {
 	m.topic = topic
 
 	return nil
+}
+
+// maxStatusMessageBytes bounds a gossiped status: a field tag and a uint64.
+const maxStatusMessageBytes = 16
+
+// isValidStatusMessage accepts only a small, well-formed SyncPeerStatus.
+func isValidStatusMessage(data []byte) bool {
+	if len(data) > maxStatusMessageBytes {
+		return false
+	}
+
+	status := &proto.SyncPeerStatus{}
+	if err := gproto.Unmarshal(data, status); err != nil {
+		return false
+	}
+
+	return len(status.ProtoReflect().GetUnknown()) == 0
 }
 
 // handleStatusUpdate is a handler of gossip
