@@ -2,8 +2,12 @@ package ibft
 
 import (
 	"errors"
+	"math/big"
 
 	"github.com/0xPolygon/go-ibft/messages/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
+
+	"github.com/w-chain-team/node/crypto"
 	"github.com/w-chain-team/node/types"
 )
 
@@ -24,13 +28,76 @@ var (
 	errMissingProposal    = errors.New("missing proposal")
 	errMissingHash        = errors.New("missing proposal hash")
 	errNestedTooDeep      = errors.New("certificate nesting too deep")
+	errSignatureEncoding  = errors.New("non-canonical signature encoding")
+	errUnknownFields      = errors.New("unknown protobuf fields")
 )
+
+// secp256k1HalfN is half the curve order: honest signatures (btcec signs
+// low-S) never have s above it.
+var secp256k1HalfN = new(big.Int).Rsh(crypto.S256.Params().N, 1)
+
+// canonicalSignature reports whether sig is the one encoding honest nodes
+// produce: 65 bytes, r and s in range with low s, recovery id 0 or 1.
+//
+// crypto.RecoverPubkey also accepts any last byte other than 1 (as id 0) and
+// the high-s twin of every signature, so each consensus message had up to 255
+// other byte forms that verify. Copies differing only there looked like new
+// messages to anything keyed on bytes (audit review C2). Header seals keep
+// the lenient check: they are verified for historical blocks.
+func canonicalSignature(sig []byte) bool {
+	if len(sig) != 65 || sig[64] > 1 {
+		return false
+	}
+
+	r := new(big.Int).SetBytes(sig[:32])
+	s := new(big.Int).SetBytes(sig[32:64])
+
+	return r.Sign() > 0 && r.Cmp(crypto.S256.Params().N) < 0 &&
+		s.Sign() > 0 && s.Cmp(secp256k1HalfN) <= 0
+}
+
+// hasUnknownFields reports whether m or any message inside it carries fields
+// this build does not know. From WChainV111 they are outside the signature, so
+// a relayer could pad a copy with them freely; honest nodes never send any.
+func hasUnknownFields(m protoreflect.Message) bool {
+	if len(m.GetUnknown()) > 0 {
+		return true
+	}
+
+	found := false
+
+	m.Range(func(fd protoreflect.FieldDescriptor, v protoreflect.Value) bool {
+		switch {
+		case fd.IsList() && fd.Message() != nil:
+			l := v.List()
+			for i := 0; i < l.Len() && !found; i++ {
+				found = hasUnknownFields(l.Get(i).Message())
+			}
+		case fd.IsMap():
+			found = true // no consensus message has a map field
+		case fd.Message() != nil:
+			found = hasUnknownFields(v.Message())
+		}
+
+		return !found
+	})
+
+	return found
+}
 
 // validateIBFTMessage rejects malformed consensus messages before they reach
 // go-ibft, which dereferences View, payload and certificate fields without
 // nil checks. Any peer can gossip such a message, so it must never panic.
 func validateIBFTMessage(msg *proto.Message) error {
-	return validateMessage(msg, 0)
+	if err := validateMessage(msg, 0); err != nil {
+		return err
+	}
+
+	if hasUnknownFields(msg.ProtoReflect()) {
+		return errUnknownFields
+	}
+
+	return nil
 }
 
 func validateMessage(msg *proto.Message, depth int) error {
@@ -52,6 +119,10 @@ func validateMessage(msg *proto.Message, depth int) error {
 
 	if len(msg.Signature) == 0 {
 		return errMissingSignature
+	}
+
+	if !canonicalSignature(msg.Signature) {
+		return errSignatureEncoding
 	}
 
 	switch msg.Type {

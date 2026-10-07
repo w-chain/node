@@ -340,8 +340,10 @@ func (t *Txn) delete(node Node, search []byte) (Node, bool) {
 		return nil, false
 
 	case *ShortNode:
-		n.hash = n.hash[:0]
-
+		// n is not changed: on success a new node replaces it, and on failure
+		// the trie is left as it was. It may be a node shared by every trie
+		// through the decoded-node cache, so clearing its hash here raced with
+		// other commits from the same parent (audit review L1).
 		plen := prefixLen(search, n.key)
 		if plen == len(search) {
 			return nil, true
