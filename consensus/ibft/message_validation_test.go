@@ -5,6 +5,8 @@ import (
 
 	"github.com/0xPolygon/go-ibft/messages/proto"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/reflect/protoreflect"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 var (
@@ -233,4 +235,60 @@ func TestValidateIBFTMessage_CertificateWithoutProposal(t *testing.T) {
 	require.ErrorIs(t, validateIBFTMessage(nested), errMissingProposal, "round change inside a proposal")
 
 	require.False(t, (&backendIBFT{}).IsValidProposalHash(nil, []byte{1}), "nil proposal must not panic")
+}
+
+// mapFields returns the map fields reachable from md, and every message type
+// visited on the way.
+func mapFields(md protoreflect.MessageDescriptor, seen map[protoreflect.FullName]bool) []protoreflect.FullName {
+	if seen[md.FullName()] {
+		return nil
+	}
+
+	seen[md.FullName()] = true
+
+	var maps []protoreflect.FullName
+
+	fields := md.Fields()
+	for i := 0; i < fields.Len(); i++ {
+		fd := fields.Get(i)
+		if fd.IsMap() {
+			maps = append(maps, fd.FullName())
+
+			continue
+		}
+
+		if fd.Message() != nil {
+			maps = append(maps, mapFields(fd.Message(), seen)...)
+		}
+	}
+
+	return maps
+}
+
+// hasUnknownFields treats a map field as unknown, so a map added to the
+// consensus proto would make every node drop honest messages. Fail here
+// instead (final review N3).
+func TestConsensusProtoHasNoMapFields(t *testing.T) {
+	t.Parallel()
+
+	seen := map[protoreflect.FullName]bool{}
+	maps := mapFields((&proto.Message{}).ProtoReflect().Descriptor(), seen)
+	require.Empty(t, maps, "map field in the consensus proto: update hasUnknownFields first")
+
+	// The walk really reached the nested messages.
+	for _, name := range []string{"PrePrepareMessage", "RoundChangeCertificate", "RoundChangeMessage",
+		"PreparedCertificate", "Proposal", "CommitMessage"} {
+		found := false
+
+		for n := range seen {
+			if string(n.Name()) == name {
+				found = true
+			}
+		}
+
+		require.True(t, found, "walk did not reach %s", name)
+	}
+
+	// And it does report a map where there is one.
+	require.NotEmpty(t, mapFields((&structpb.Struct{}).ProtoReflect().Descriptor(), map[protoreflect.FullName]bool{}))
 }
