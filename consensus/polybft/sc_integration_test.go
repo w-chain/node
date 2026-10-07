@@ -265,6 +265,11 @@ func TestIntegration_PerformExit(t *testing.T) {
 func TestIntegration_CommitEpoch(t *testing.T) {
 	t.Parallel()
 
+	// It runs with every fork enabled, and from WChainV110 the PolyBFT-only
+	// precompiles this contract calls are switched off on purpose. W Chain
+	// runs IBFT; PolyBFT is not used.
+	t.Skip("PolyBFT-only precompiles are off from wchainv110")
+
 	// init validator sets
 	validatorSetSize := []int{5, 10, 50, 100}
 

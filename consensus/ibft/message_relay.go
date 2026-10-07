@@ -58,7 +58,12 @@ func (i *backendIBFT) isRelayableIBFTMessage(data []byte) bool {
 		return false
 	}
 
-	return relayCheck(msg, i.blockchain.Header().Number, i.isValidatorAt, i.IsValidValidator)
+	return i.relayable(msg, i.blockchain.Header().Number)
+}
+
+// relayable is the gossip validator's decision for a decoded message.
+func (i *backendIBFT) relayable(msg *proto.Message, head uint64) bool {
+	return relayCheck(msg, head, i.isValidatorAt, i.IsValidValidator) && i.compactUnsignedPartsOK(msg)
 }
 
 // isValidatorAt reports whether addr is in the validator set for height.
@@ -114,14 +119,20 @@ func validatorsForMessage(
 // heights above head, dropped once the chain moves past them.
 type storedMessageBudget struct {
 	mu   sync.Mutex
-	used map[uint64]map[string]int      // height -> sender -> bytes
-	seen map[uint64]map[string]struct{} // height -> sender+signature already charged
+	used map[uint64]map[string]int     // height -> sender -> bytes
+	held map[uint64]map[budgetView]int // height -> view -> largest copy charged
+}
+
+// budgetView is what go-ibft keeps one message for: sender, round and type.
+type budgetView struct {
+	sender string
+	round  uint64
+	typ    proto.MessageType
 }
 
 // allow records a message about to be handed to go-ibft and reports whether
 // its sender is still within budget. from must already be authenticated
-// (checked by the gossip validator), so nobody can spend another validator's
-// budget.
+// (checked by the gossip validator).
 func (b *storedMessageBudget) allow(from []byte, height, head uint64, size int) bool {
 	// go-ibft discards messages for finished heights itself; they cost nothing.
 	if height <= head {
@@ -134,44 +145,49 @@ func (b *storedMessageBudget) allow(from []byte, height, head uint64, size int) 
 	return b.charge(from, height, head, size)
 }
 
-// allowMessage is allow for one received message, charging each signed message
-// once. A copy with a signature already charged for this sender and height
-// passes free: go-ibft keeps the first copy with a given signature, so it costs
-// nothing, and charging it would let anyone who replays a validator's messages
-// use up that validator's budget and have its real votes dropped.
+// allowMessage is allow for one received message, charged by what go-ibft
+// actually holds: one message per sender, height, round and type, so the
+// largest copy seen for that view. Another copy of the same view, a replay, a
+// re-encoding or a relayer's variant, costs only what it adds over the largest
+// one already charged. Charging per copy let anyone use up a validator's budget
+// with copies of its own messages and have its real votes dropped (audit
+// review C2).
 func (b *storedMessageBudget) allowMessage(msg *proto.Message, head uint64) bool {
 	height := msg.View.Height
-	if height <= head || len(msg.Signature) == 0 {
-		return b.allow(msg.From, height, head, gproto.Size(msg))
+	if height <= head {
+		return true
 	}
+
+	size := gproto.Size(msg)
+	view := budgetView{sender: string(msg.From), round: msg.View.Round, typ: msg.Type}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	for h := range b.seen {
+	for h := range b.held {
 		if h <= head {
-			delete(b.seen, h)
+			delete(b.held, h)
 		}
 	}
 
-	key := string(msg.From) + string(msg.Signature)
-	if _, ok := b.seen[height][key]; ok {
+	prev := b.held[height][view]
+	if size <= prev {
 		return true
 	}
 
-	if !b.charge(msg.From, height, head, gproto.Size(msg)) {
+	if !b.charge(msg.From, height, head, size-prev) {
 		return false
 	}
 
-	if b.seen == nil {
-		b.seen = make(map[uint64]map[string]struct{})
+	if b.held == nil {
+		b.held = make(map[uint64]map[budgetView]int)
 	}
 
-	if b.seen[height] == nil {
-		b.seen[height] = make(map[string]struct{})
+	if b.held[height] == nil {
+		b.held[height] = make(map[budgetView]int)
 	}
 
-	b.seen[height][key] = struct{}{}
+	b.held[height][view] = size
 
 	return true
 }
