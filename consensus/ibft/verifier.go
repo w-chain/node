@@ -20,6 +20,12 @@ func (i *backendIBFT) calculateProposalHashFromBlockBytes(
 	proposal []byte,
 	round *uint64,
 ) (types.Hash, error) {
+	// The bytes may come from any relayer (compact messages do not sign the
+	// block): bound the decoder's allocations first.
+	if err := types.CheckRLPDensity(proposal); err != nil {
+		return types.ZeroHash, err
+	}
+
 	block := &types.Block{}
 	if err := block.UnmarshalRLP(proposal); err != nil {
 		return types.ZeroHash, err
@@ -126,6 +132,11 @@ func (i *backendIBFT) IsValidValidator(msg *protoIBFT.Message) bool {
 	// go-ibft calls this before its own View nil check, including for
 	// messages nested inside certificates.
 	if msg == nil || msg.View == nil || len(msg.From) == 0 {
+		return false
+	}
+
+	// One accepted encoding per signature (see canonicalSignature).
+	if !canonicalSignature(msg.Signature) {
 		return false
 	}
 

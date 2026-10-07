@@ -9,9 +9,17 @@ import (
 
 var (
 	testFrom = make([]byte, 20)
-	testSig  = []byte{1}
+	testSig  = canonicalTestSig()
 	testView = &proto.View{Height: 10, Round: 1}
 )
+
+// canonicalTestSig is a well-formed 65-byte signature: r = s = 1, recovery id 0.
+func canonicalTestSig() []byte {
+	sig := make([]byte, 65)
+	sig[31], sig[63] = 1, 1
+
+	return sig
+}
 
 func prepareMsg() *proto.Message {
 	return &proto.Message{

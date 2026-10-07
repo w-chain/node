@@ -201,16 +201,40 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 
 		// if the bestPeer does not have a new block continue
 		if bestPeer.Number <= localLatest {
+			// No usable peer is ahead. Peers skipped earlier may well be
+			// ahead by now: forget the skip list so they are tried again on
+			// the next status. It used to be cleared only when every peer was
+			// skipped, so one connected peer that was not ahead kept the
+			// syncer from ever downloading again while consensus was stuck
+			// (mainnet epoch freezes, 2026-10-06/07).
+			if len(skipList) > 0 {
+				s.logger.Debug("no peer ahead outside the skip list, retrying skipped peers",
+					"skipped", len(skipList), "local", localLatest)
+
+				skipList = make(map[peer.ID]bool)
+			}
+
 			continue
 		}
 
 		// fetch block from the peer
 		lastNumber, shouldTerminate, err := s.bulkSyncWithPeer(bestPeer.ID, bestPeer.Number, callback)
 		if err != nil {
-			s.logger.Warn("failed to complete bulk sync with peer, try to next one", "peer ID", "error", bestPeer.ID, err)
+			s.logger.Warn("failed to complete bulk sync with peer, try to next one", "peer ID", bestPeer.ID, "error", err)
 		}
 
 		if lastNumber < bestPeer.Number {
+			// The local head may have reached the peer's height in the
+			// meantime (consensus wrote the block): then the peer had nothing
+			// newer to send and did nothing wrong. Skipping it here was silent
+			// and, with the trap above, permanent.
+			if !peerFellShort(s.blockchain.Header(), bestPeer.Number) {
+				continue
+			}
+
+			s.logger.Info("skipping sync peer that sent fewer blocks than it announced",
+				"peer ID", bestPeer.ID, "announced", bestPeer.Number, "received up to", lastNumber)
+
 			skipList[bestPeer.ID] = true
 
 			// continue to next peer
@@ -223,6 +247,13 @@ func (s *syncer) Sync(callback func(*types.FullBlock) bool) error {
 	}
 
 	return nil
+}
+
+// peerFellShort reports whether a peer that sent fewer blocks than it
+// announced is to blame: not if the local head has reached the announced
+// height meanwhile, so it had nothing newer to send.
+func peerFellShort(localHead *types.Header, announced uint64) bool {
+	return localHead == nil || localHead.Number < announced
 }
 
 // rateWindow is the window over which a sync peer's rate is checked.
