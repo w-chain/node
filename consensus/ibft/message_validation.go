@@ -74,7 +74,10 @@ func hasUnknownFields(m protoreflect.Message) bool {
 				found = hasUnknownFields(l.Get(i).Message())
 			}
 		case fd.IsMap():
-			found = true // no consensus message has a map field
+			// No consensus message has a map field, and this treats one as
+			// unknown: adding one to the proto would make every node drop
+			// honest messages. TestConsensusProtoHasNoMapFields guards it.
+			found = true
 		case fd.Message() != nil:
 			found = hasUnknownFields(v.Message())
 		}
