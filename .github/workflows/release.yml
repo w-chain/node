@@ -1,62 +1,94 @@
 ---
+# W Chain release build. Run by hand from the Actions tab on the branch to release:
+#   fix/v1.0.8      -> mainnet binary (staking 0xfAc510D5…)
+#   testnet/v1.0.8  -> testnet binary (staking 0xd941a16a…)
+# The staking address is hardcoded in contracts/staking/query.go, so the branch decides the network
+# and the build fails if the binary carries the wrong address.
 name: Release
 on:  # yamllint disable-line rule:truthy
-  push:
-    branches-ignore:
-      - '**'
-    tags:
-      - 'v*.*.*'
-      # to be used by fork patch-releases ^^
-      - 'v*.*.*-*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version, e.g. v1.0.8 (mainnet) or v1.0.8-testnet'
+        required: true
+      draft_release:
+        description: 'Also create a DRAFT GitHub release with the files'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
 
 jobs:
-  goreleaser:
+  build:
     runs-on: ubuntu-latest
     env:
-      DOCKER_CONFIG: $HOME/.docker
+      VERSION: ${{ inputs.version }}
+      MAINNET_STAKING: fAc510D5dB8cadfF323D4b979D898dc38F3FB6dF
+      TESTNET_STAKING: d941a16af07cAc64F61C92258250C018F6e929E0
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v3
+        uses: actions/setup-go@v5
         with:
-          go-version: 1.20.x
+          go-version-file: go.mod
 
-      - name: Prepare
-        id: prepare
+      - name: Network from branch
         run: |
-          TAG=${GITHUB_REF#refs/tags/}
-          echo tag_name=${TAG} >> $GITHUB_OUTPUT
+          case "$GITHUB_REF_NAME" in
+            testnet/*) echo "NETWORK=testnet" >> "$GITHUB_ENV" ;;
+            *)         echo "NETWORK=mainnet" >> "$GITHUB_ENV" ;;
+          esac
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v2
+      # -trimpath keeps build-machine paths out of the binary; BuildTime is the commit
+      # time, so the same commit always gives the same binary.
+      - name: Build linux/amd64
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o w-chain-node-linux-amd64 -ldflags="\
+            -X 'github.com/w-chain-team/node/versioning.Version=${VERSION}' \
+            -X 'github.com/w-chain-team/node/versioning.Commit=${GITHUB_SHA}' \
+            -X 'github.com/w-chain-team/node/versioning.Branch=${GITHUB_REF_NAME}' \
+            -X 'github.com/w-chain-team/node/versioning.BuildTime=$(git log -1 --format=%cI)'" .
+          ./w-chain-node-linux-amd64 version
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v2
+      - name: Check staking address
+        run: |
+          m=$(grep -aci "$MAINNET_STAKING" w-chain-node-linux-amd64 || true)
+          t=$(grep -aci "$TESTNET_STAKING" w-chain-node-linux-amd64 || true)
+          echo "network=$NETWORK mainnet=$m testnet=$t"
+          if [ "$NETWORK" = testnet ]; then [ "$t" -ge 1 ] && [ "$m" -eq 0 ]; else [ "$m" -ge 1 ] && [ "$t" -eq 0 ]; fi
+
+      - name: Package
+        run: |
+          tar -czf "w-chain-node_${VERSION}_linux_amd64.tar.gz" w-chain-node-linux-amd64
+          files="w-chain-node_${VERSION}_linux_amd64.tar.gz"
+          if [ -f "release/genesis-${NETWORK}.json" ]; then
+            cp "release/genesis-${NETWORK}.json" genesis.json
+            files="$files genesis.json"
+          fi
+          sha256sum $files > "w-chain-node_${VERSION}_checksums.txt"
+          cat "w-chain-node_${VERSION}_checksums.txt"
+          echo "FILES=$files w-chain-node_${VERSION}_checksums.txt" >> "$GITHUB_ENV"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          name: w-chain-node_${{ inputs.version }}
+          path: |
+            w-chain-node_*.tar.gz
+            w-chain-node_*_checksums.txt
+            genesis.json
+          if-no-files-found: ignore
 
-      - name: Run GoReleaser
-        run: |
-          docker run \
-          		--rm \
-          		--privileged \
-          		-e CGO_ENABLED=1 \
-          		-e GITHUB_TOKEN \
-          		-e SLACK_WEBHOOK \
-              -e DOCKER_CONFIG \
-          		-v /var/run/docker.sock:/var/run/docker.sock \
-          		-v `pwd`:/go/src/$(PACKAGE_NAME) \
-          		-w /go/src/$(PACKAGE_NAME) \
-          		ghcr.io/goreleaser/goreleaser-cross:${GOLANG_CROSS_VERSION} \
-          		--rm-dist --skip-validate
+      - name: Draft GitHub release
+        if: ${{ inputs.draft_release }}
         env:
-          PACKAGE_NAME: github.com/0xPolygon/polygon-edge
-          GOLANG_CROSS_VERSION: v1.20.5
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.prepare.outputs.tag_name }}
-          SLACK_WEBHOOK: ${{ secrets.SLACK_EDGE_GITHUB_URL }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$VERSION" $FILES --draft --target "$GITHUB_SHA" \
+            --title "W Chain node $VERSION ($NETWORK)" \
+            --notes "Built by CI from ${GITHUB_REF_NAME} @ ${GITHUB_SHA}. Network: ${NETWORK}."
