@@ -21,21 +21,22 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       VERSION: ${{ inputs.version }}
       MAINNET_STAKING: fAc510D5dB8cadfF323D4b979D898dc38F3FB6dF
       TESTNET_STAKING: d941a16af07cAc64F61C92258250C018F6e929E0
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          cache: false
 
       - name: Network from branch
         run: |
@@ -43,6 +44,15 @@ jobs:
             testnet/*) echo "NETWORK=testnet" >> "$GITHUB_ENV" ;;
             *)         echo "NETWORK=mainnet" >> "$GITHUB_ENV" ;;
           esac
+
+      # A -testnet version only from a testnet/* branch, and never the other way round.
+      - name: Check version matches branch
+        run: |
+          case "$VERSION" in *-testnet) v=testnet ;; *) v=mainnet ;; esac
+          if [ "$v" != "$NETWORK" ]; then
+            echo "::error::version $VERSION is $v but branch $GITHUB_REF_NAME builds $NETWORK"
+            exit 1
+          fi
 
       # -trimpath keeps build-machine paths out of the binary; BuildTime is the commit
       # time, so the same commit always gives the same binary.
@@ -76,7 +86,7 @@ jobs:
           echo "FILES=$files checksums-${VERSION}.txt" >> "$GITHUB_ENV"
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: w-chain-node_${{ inputs.version }}
           path: |
@@ -90,6 +100,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$VERSION" $FILES --draft --target "$GITHUB_SHA" \
+          # Testnet releases are pre-releases and never take "Latest" from mainnet.
+          extra=""
+          if [ "$NETWORK" = testnet ]; then extra="--prerelease --latest=false"; fi
+          gh release create "$VERSION" $FILES --draft $extra --target "$GITHUB_SHA" \
             --title "W Chain node $VERSION ($NETWORK)" \
             --notes "Built by CI from ${GITHUB_REF_NAME} @ ${GITHUB_SHA}. Network: ${NETWORK}."
