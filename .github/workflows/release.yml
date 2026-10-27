@@ -62,25 +62,26 @@ jobs:
           echo "network=$NETWORK mainnet=$m testnet=$t"
           if [ "$NETWORK" = testnet ]; then [ "$t" -ge 1 ] && [ "$m" -eq 0 ]; else [ "$m" -ge 1 ] && [ "$t" -eq 0 ]; fi
 
+      # Same file names as the v1.0.8 release, so the docs only change the version.
       - name: Package
         run: |
-          tar -czf "w-chain-node_${VERSION}_linux_amd64.tar.gz" w-chain-node-linux-amd64
-          files="w-chain-node_${VERSION}_linux_amd64.tar.gz"
+          tar -czf "w-chain-node-${VERSION}-linux-amd64.tar.gz" w-chain-node-linux-amd64
+          files="w-chain-node-${VERSION}-linux-amd64.tar.gz"
           if [ -f "release/genesis-${NETWORK}.json" ]; then
             cp "release/genesis-${NETWORK}.json" genesis.json
             files="$files genesis.json"
           fi
-          sha256sum $files > "w-chain-node_${VERSION}_checksums.txt"
-          cat "w-chain-node_${VERSION}_checksums.txt"
-          echo "FILES=$files w-chain-node_${VERSION}_checksums.txt" >> "$GITHUB_ENV"
+          sha256sum $files > "checksums-${VERSION}.txt"
+          cat "checksums-${VERSION}.txt"
+          echo "FILES=$files checksums-${VERSION}.txt" >> "$GITHUB_ENV"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: w-chain-node_${{ inputs.version }}
           path: |
-            w-chain-node_*.tar.gz
-            w-chain-node_*_checksums.txt
+            w-chain-node-*-linux-amd64.tar.gz
+            checksums-*.txt
             genesis.json
           if-no-files-found: ignore
 
